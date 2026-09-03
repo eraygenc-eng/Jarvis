@@ -1,5 +1,7 @@
 from google import genai
 from google.genai import errors
+from google.genai import types
+from core.prompts import JARVIS_SYSTEM_PROMPT
 
 from config.settings import (
     GEMINI_API_KEY,
@@ -17,7 +19,10 @@ class GeminiLLM(BaseLLM):
         self.model = GEMINI_MODEL
 
         self.chat = self.client.chats.create(
-            model=self.model
+            model=self.model,
+            config=types.GenerateContentConfig(
+                system_instruction=JARVIS_SYSTEM_PROMPT,
+            ),
         )
 
     def generate(self, prompt: str) -> str:
@@ -39,7 +44,10 @@ class GeminiLLM(BaseLLM):
 
             self.chat = self.client.chats.create(
                 model=self.model,
-                history=history
+                history=history,
+                config=types.GenerateContentConfig(
+                    system_instruction=JARVIS_SYSTEM_PROMPT,
+                ),
             )
 
             response = self.chat.send_message(prompt)
