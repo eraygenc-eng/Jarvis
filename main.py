@@ -1,8 +1,8 @@
-from core.llm.gemini import GeminiLLM
+from core.llm.factory import create_llm
 from core.agent import JarvisAgent
 
 
-llm = GeminiLLM()
+llm = create_llm()
 agent = JarvisAgent(llm)
 
 response = agent.run("Hello")
