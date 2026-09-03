@@ -9,6 +9,13 @@ load_dotenv(BASE_DIR / ".env")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
+
+# For backup
+GEMINI_FALLBACK_MODEL = os.getenv(
+    "GEMINI_FALLBACK_MODEL",
+    "gemini-3.6-flash"
+)
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
 

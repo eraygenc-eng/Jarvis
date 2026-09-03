@@ -5,6 +5,15 @@ from core.agent import JarvisAgent
 llm = create_llm()
 agent = JarvisAgent(llm)
 
-response = agent.run("Hello")
+print("Jarvis is ready. Type 'exit' to quit.")
 
-print(response)
+while True:
+    prompt = input("You: ")
+
+    if prompt.lower() == "exit":
+        print("Jarvis: Goodbye...")
+        break
+
+    response = agent.run(prompt)
+
+    print(f"Jarvis: {response}")
