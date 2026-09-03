@@ -1,8 +1,10 @@
 from core.llm.gemini import GeminiLLM
+from core.agent import JarvisAgent
 
 
 llm = GeminiLLM()
+agent = JarvisAgent(llm)
 
-response = llm.generate("Hello")
+response = agent.run("Hello")
 
 print(response)
