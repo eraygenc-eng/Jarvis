@@ -10,6 +10,7 @@ from core.tools.calculator import calculator
 from core.tools.open_application import open_application
 from core.tools.close_application import close_application
 from core.tools.launch_game import launch_game
+from core.tools.web_search import web_search_tool
 
 
 # Main Jarvis agent
@@ -26,7 +27,7 @@ class JarvisAgent:
         # Creates the LangChain agent with tools and fallback model.
         self.agent = create_agent(
             model=self.llm.get_model(),
-            tools=[calculator, open_application, close_application, launch_game],
+            tools=[calculator, open_application, close_application, launch_game, web_search_tool],
             system_prompt=JARVIS_SYSTEM_PROMPT,
             middleware=[
                 ModelFallbackMiddleware(
