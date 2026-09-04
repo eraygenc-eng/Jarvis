@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from core.llm.base import BaseLLM
 from core.prompts import JARVIS_SYSTEM_PROMPT
 from core.tools.calculator import calculator
+from core.tools.open_application import open_application
 
 
 # Main Jarvis agent
@@ -23,7 +24,7 @@ class JarvisAgent:
         # Creates the LangChain agent with tools and fallback model.
         self.agent = create_agent(
             model=self.llm.get_model(),
-            tools=[calculator],
+            tools=[calculator, open_application],
             system_prompt=JARVIS_SYSTEM_PROMPT,
             middleware=[
                 ModelFallbackMiddleware(
