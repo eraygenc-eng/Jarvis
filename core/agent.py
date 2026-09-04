@@ -56,7 +56,7 @@ class JarvisAgent:
         # Gets the final Jarvis message.
         content = result["messages"][-1].content
 
-        # Gemini may return the response as text blocks.
+        # Some models may return the response as text blocks.
         if isinstance(content, list):
             return "".join(
                 block.get("text", "")

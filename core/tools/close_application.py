@@ -35,7 +35,7 @@ def _match_score(query: str, candidate: str) -> float:
     return SequenceMatcher(None, query, candidate).ratio() * 100
 
 
-def _get_running_processes():
+def _get_running_processes() -> list[str]:
     """
     Returns a list of running process names on Windows.
     """
@@ -58,13 +58,13 @@ def _get_running_processes():
             if row:
                 processes.append(row[0])
 
-            return processes
+        return processes
 
     except Exception:
         return []
 
 
-def _find_process(application_name: str):
+def _find_process(application_name: str) -> str | None:
     """
     Finds the best matching running process.
     """
@@ -109,7 +109,7 @@ def close_application(application_name: str) -> str:
 
     try:
         result = subprocess.run(
-            ["taskkill", "/IM", process, "/F"],
+            ["taskkill", "/IM", process, "/T", "/F"],
             capture_output=True,
             text=True,
             encoding="utf-8",
