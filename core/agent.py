@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from core.llm.base import BaseLLM
 from core.prompts import JARVIS_SYSTEM_PROMPT
+
 from core.tools.calculator import calculator
 from core.tools.open_application import open_application
 from core.tools.close_application import close_application
@@ -15,7 +16,7 @@ from core.tools.web_search import web_search_tool
 
 # Main Jarvis agent
 class JarvisAgent:
-    def __init__(self, llm: BaseLLM):
+    def __init__(self, llm: BaseLLM, browser_tools=None):
         self.llm = llm
 
         # Keeps conversation history in memory.
@@ -24,10 +25,23 @@ class JarvisAgent:
         # Unique ID for this conversation.
         self.thread_id = str(uuid.uuid4())
 
+        # Create the main tool list
+        tools = [
+            calculator,
+            open_application,
+            close_application,
+            launch_game,
+            web_search_tool,
+        ]
+
+        # Add browser tools if available
+        if browser_tools:
+            tools.extend(browser_tools)
+
         # Creates the LangChain agent with tools and fallback model.
         self.agent = create_agent(
             model=self.llm.get_model(),
-            tools=[calculator, open_application, close_application, launch_game, web_search_tool],
+            tools=tools,
             system_prompt=JARVIS_SYSTEM_PROMPT,
             middleware=[
                 ModelFallbackMiddleware(
@@ -37,9 +51,9 @@ class JarvisAgent:
             checkpointer=self.memory,
         )
 
-    def run(self, prompt: str) -> str:
+    async def run(self, prompt: str) -> str:
         # Sends the user message to the agent.
-        result = self.agent.invoke(
+        result = await self.agent.ainvoke(
             {
                 "messages": [
                     {
