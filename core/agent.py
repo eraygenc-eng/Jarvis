@@ -12,6 +12,7 @@ from core.tools.open_application import open_application
 from core.tools.close_application import close_application
 from core.tools.launch_game import launch_game
 from core.tools.web_search import web_search_tool
+from core.security.middleware import security_middleware
 
 
 from core.callbacks.timing import TimingCallback
@@ -50,6 +51,7 @@ class JarvisAgent:
             tools=tools,
             system_prompt=JARVIS_SYSTEM_PROMPT,
             middleware=[
+                security_middleware,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 )
