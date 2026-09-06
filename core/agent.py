@@ -45,6 +45,7 @@ class JarvisAgent:
         if browser_tools:
             tools.extend(browser_tools)
 
+
         # Creates the LangChain agent with tools and fallback model.
         self.agent = create_agent(
             model=self.llm.get_model(),
