@@ -1,3 +1,6 @@
+import time
+
+
 import asyncio
 
 from core.llm.factory import create_llm
@@ -28,9 +31,16 @@ async def main():
                 print("Jarvis: Goodbye...")
                 break
 
+            # Start timing the request
+            start_time = time.perf_counter()
+
             response = await agent.run(prompt)
 
+            # Calculate total request time
+            elapsed_time = time.perf_counter() - start_time
+
             print(f"Jarvis: {response}")
+            print(f"[Timing] Total: {elapsed_time:.2f} seconds")
 
     finally:
         # Close the browser connection

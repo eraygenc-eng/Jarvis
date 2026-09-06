@@ -14,7 +14,7 @@ class BrowserManager:
                         "npx",
                         "-y",
                         "@playwright/mcp@latest",
-                        "--extension",
+                        "--isolated",
                     ],
                     "transport": "stdio",
                 }

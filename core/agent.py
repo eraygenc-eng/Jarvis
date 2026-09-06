@@ -14,6 +14,9 @@ from core.tools.launch_game import launch_game
 from core.tools.web_search import web_search_tool
 
 
+from core.callbacks.timing import TimingCallback
+
+
 # Main Jarvis agent
 class JarvisAgent:
     def __init__(self, llm: BaseLLM, browser_tools=None):
@@ -24,6 +27,9 @@ class JarvisAgent:
 
         # Unique ID for this conversation.
         self.thread_id = str(uuid.uuid4())
+
+        # Measure LLM and tool execution times
+        self.timing_callback = TimingCallback()
 
         # Create the main tool list
         tools = [
@@ -65,7 +71,10 @@ class JarvisAgent:
             config={
                 "configurable": {
                     "thread_id": self.thread_id
-                }
+                },
+
+                # Track LLM and tool execution times
+                "callbacks": [self.timing_callback],
             },
         )
 
