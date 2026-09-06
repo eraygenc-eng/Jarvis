@@ -1,3 +1,6 @@
+import ipaddress
+
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -64,6 +67,60 @@ SENSITIVE_KEYWORDS = {
     "şifre değiştir",
 }
 
+def check_url_safety(url: str) -> SecurityDecision | None:
+    # Parse the URL
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return SecurityDecision(
+            action=SecurityAction.BLOCK,
+            reason="The URL could not be parsed safely.",
+        )
+
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+
+    # Allow only normal web protocols
+    if scheme not in {"http", "https"}:
+        return SecurityDecision(
+            action=SecurityAction.BLOCK,
+            reason=f"URL scheme '{scheme}' is not allowed.",
+        )
+
+    # Block URLs with embedded credentials
+    if parsed.username or parsed.password:
+        return SecurityDecision(
+            action=SecurityAction.BLOCK,
+            reason="URLs with embedded credentials are not allowed.",
+        )
+
+    # Ask before accessing localhost
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="The browser wants to access a local service.",
+        )
+
+    # Check direct IP addresses
+    try:
+        ip = ipaddress.ip_address(hostname)
+
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+        ):
+            return SecurityDecision(
+                action=SecurityAction.CONFIRM,
+                reason="The browser wants to access a private or local network address.",
+            )
+
+    except ValueError:
+        # The hostname is a domain name, not an IP address
+        pass
+
+    return None
+
 
 def evaluate_tool_call(
     tool_name: str,
@@ -83,6 +140,16 @@ def evaluate_tool_call(
             action=SecurityAction.CONFIRM,
             reason=f"{tool_name} requires user confirmation.",
         )
+
+    # Check URL safety
+    if isinstance(arguments, dict):
+        url = arguments.get("url")
+
+        if isinstance(url, str):
+            url_decision = check_url_safety(url)
+
+            if url_decision is not None:
+                return url_decision
 
     # Only check keywords for action tools
     if tool_name in ACTION_TOOLS:
