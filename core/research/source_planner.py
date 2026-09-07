@@ -156,6 +156,7 @@ PRODUCT_SOURCES = {
         "Itopya",
         "Hepsiburada",
         "Trendyol",
+        "Ciceksepeti",
     ],
 
     ProductType.GENERAL: [
@@ -163,6 +164,7 @@ PRODUCT_SOURCES = {
         "Trendyol",
         "Hepsiburada",
         "Akakce",
+        "Ciceksepeti",
     ],
 }
 
@@ -194,6 +196,24 @@ COMPUTER_HARDWARE_KEYWORDS = [
     "computer case",
     "cpu cooler",
     "sogutucu",
+
+    # Computer peripherals
+    "mouse",
+    "fare",
+    "keyboard",
+    "klavye",
+    "monitor",
+    "webcam",
+    "headset",
+    "gaming mouse",
+    "gaming keyboard",
+    "gaming monitor",
+
+    # Common peripheral terms
+    "computer mouse",
+    "wireless mouse",
+    "kablosuz fare",
+    "mekanik klavye",
 ]
 
 
@@ -247,15 +267,22 @@ def detect_research_category(prompt: str) -> ResearchCategory:
 
 
 
-def plan_sources(prompt: str, category: ResearchCategory | None = None,
+def plan_sources(
+    prompt: str,
+    category: ResearchCategory | None = None,
+    product_type: ProductType | None = None,
 ) -> list[str]:
+    
     # Detect the category only when it was not already provided
     if category is None:
         category = detect_research_category(prompt)
 
     # Use specialized sources for product comparisons
     if category == ResearchCategory.PRODUCT:
-        product_type = detect_product_type(prompt)
+        # Detect the product type only when it was not already provided
+        if product_type is None:
+            product_type = detect_product_type(prompt)
+
         return PRODUCT_SOURCES[product_type].copy()
 
     # Return trusted default sources for known categories

@@ -63,6 +63,15 @@ TURKISH_SUFFIXES = [
     "lerde",
     "lardan",
     "lerden",
+
+
+    # Buffer consonant suffixes
+    "yi",
+    "yu",
+    "ya",
+    "ye",
+    "yin",
+    "yun",
 ]
 
 

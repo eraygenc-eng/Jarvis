@@ -2,7 +2,7 @@ from typing import Callable
 
 from langchain_core.tools import tool
 
-from core.research.comparison_state import ComparisonState, ComparisonResult
+from core.research.comparison_state import ComparisonState, ComparisonResult, normalize_identity
 
 
 
@@ -76,9 +76,16 @@ def create_research_tools(
     def research_add_result(
         title: str,
         source: str,
-        url: str | None = None,
+        model: str | None = None,
+        variant: str | None = None,
+        sku: str | None = None,
+        seller: str | None = None,
+        regular_price: float | None = None,
         price: float | None = None,
+        price_condition: str | None = None,
+        shipping_cost: float | None = None,
         currency: str | None = None,
+        url: str | None = None,
         details: dict | None = None,
     ) -> str:
         """Store one option found during comparison research."""
@@ -90,18 +97,69 @@ def create_research_tools(
         if state is None:
             return "No active comparison research."
 
-        # Create a structured comparison result
         result = ComparisonResult(
             title=title.strip(),
             source=source.strip(),
-            url=url,
+            model=model.strip() if model else None,
+            variant=variant.strip() if variant else None,
+            sku=sku.strip() if sku else None,
+            seller=seller.strip() if seller else None,
+            regular_price=regular_price,
             price=price,
+            price_condition=(
+                price_condition.strip()
+                if price_condition
+                else None
+            ),
+            shipping_cost=shipping_cost,
             currency=currency,
+            url=url,
             details=details or {},
         )
 
+        # Collect identity warnings for similar results
+        identity_warnings = []
+
+        for existing_result in state.results:
+            # Compare identity only when both results refer to the same model
+            if result.model and existing_result.model:
+                same_model = (
+                    normalize_identity(result.model)
+                    == normalize_identity(existing_result.model)
+                )
+
+                if not same_model:
+                    continue
+
+                identity_match = result.matches_identity(existing_result)
+
+                # Warn when the same model has a different known SKU or variant
+                if identity_match is False:
+                    identity_warnings.append(
+                        f"Possible variant mismatch with "
+                        f"'{existing_result.title}' from "
+                        f"{existing_result.source}."
+                    )
+
+                # Warn when exact identity cannot be verified
+                elif identity_match is None:
+                    identity_warnings.append(
+                        f"Exact variant could not be verified against "
+                        f"'{existing_result.title}' from "
+                        f"{existing_result.source}."
+                    )
+
         # Store the result in the active research state
         state.add_result(result)
+
+        # Return warnings so the agent does not assume variants are identical
+        if identity_warnings:
+            warnings_text = " ".join(identity_warnings)
+
+            return (
+                f"Stored research result: {result.title}. "
+                f"IDENTITY WARNING: {warnings_text}"
+            )
 
         return f"Stored research result: {result.title}"
 
