@@ -81,19 +81,9 @@ class JarvisAgent:
         task_type = classify_task(prompt)
 
 
-        # Temporary debug output for research routing
-        print(f"[DEBUG] Task type: {task_type}")
-
-
         # Create a research state for comparison tasks
         if task_type == TaskType.COMPARISON:
-            self.current_comparison_state = create_comparison_state(prompt)
-
-         # Temporary debug output for research state
-        print(
-            f"[DEBUG] Planned sources: "
-            f"{self.current_comparison_state.planned_sources}"
-        )
+            self.current_comparison_state = await create_comparison_state(prompt, self.llm)
 
 
         # Sends the user message to the agent.

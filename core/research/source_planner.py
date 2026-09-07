@@ -247,9 +247,11 @@ def detect_research_category(prompt: str) -> ResearchCategory:
 
 
 
-def plan_sources(prompt: str) -> list[str]:
-    # Detect what kind of comparison the user requested
-    category = detect_research_category(prompt)
+def plan_sources(prompt: str, category: ResearchCategory | None = None,
+) -> list[str]:
+    # Detect the category only when it was not already provided
+    if category is None:
+        category = detect_research_category(prompt)
 
     # Use specialized sources for product comparisons
     if category == ResearchCategory.PRODUCT:
@@ -260,7 +262,7 @@ def plan_sources(prompt: str) -> list[str]:
     if category in CATEGORY_SOURCES:
         return CATEGORY_SOURCES[category].copy()
 
-    # General comparisons will use dynamic source discovery later
+    # General comparisons will use semantic fallback
     return []
 
 
