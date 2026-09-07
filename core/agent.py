@@ -7,6 +7,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from core.llm.base import BaseLLM
 from core.prompts import JARVIS_SYSTEM_PROMPT
 
+
+from core.research.task_classifier import TaskType, classify_task
+from core.research.research_manager import create_comparison_state
+from core.research.research_tools import create_research_tools
+
 from core.tools.calculator import calculator
 from core.tools.open_application import open_application
 from core.tools.close_application import close_application
@@ -29,6 +34,14 @@ class JarvisAgent:
         # Unique ID for this conversation.
         self.thread_id = str(uuid.uuid4())
 
+        # Store the active comparison research state
+        self.current_comparison_state = None
+
+        # Create tools that can access the active research state
+        research_tools = create_research_tools(
+            lambda: self.current_comparison_state
+        )
+
         # Measure LLM and tool execution times
         self.timing_callback = TimingCallback()
 
@@ -40,6 +53,9 @@ class JarvisAgent:
             launch_game,
             web_search_tool,
         ]
+
+        # Add comparison research tools
+        tools.extend(research_tools)
 
         # Add browser tools if available
         if browser_tools:
@@ -61,6 +77,25 @@ class JarvisAgent:
         )
 
     async def run(self, prompt: str) -> str:
+        # Detect what kind of task the user requested
+        task_type = classify_task(prompt)
+
+
+        # Temporary debug output for research routing
+        print(f"[DEBUG] Task type: {task_type}")
+
+
+        # Create a research state for comparison tasks
+        if task_type == TaskType.COMPARISON:
+            self.current_comparison_state = create_comparison_state(prompt)
+
+         # Temporary debug output for research state
+        print(
+            f"[DEBUG] Planned sources: "
+            f"{self.current_comparison_state.planned_sources}"
+        )
+
+
         # Sends the user message to the agent.
         result = await self.agent.ainvoke(
             {

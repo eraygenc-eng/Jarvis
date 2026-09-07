@@ -31,6 +31,10 @@ TOOL_PERMISSIONS = {
     "calculator": ToolPermission.ALLOW,
     "web_search": ToolPermission.ALLOW,
 
+    "research_status": ToolPermission.ALLOW,
+    "research_mark_source_checked": ToolPermission.ALLOW,
+    "research_add_result": ToolPermission.ALLOW,
+
     "browser_close": ToolPermission.ALLOW,
     "browser_resize": ToolPermission.ALLOW,
     "browser_console_messages": ToolPermission.ALLOW,
