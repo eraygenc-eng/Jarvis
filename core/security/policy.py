@@ -1,3 +1,4 @@
+import re
 import ipaddress
 
 from urllib.parse import urlparse
@@ -47,6 +48,14 @@ TOOL_PERMISSIONS = {
     "browser_hover": ToolPermission.ALLOW,
     "browser_wait_for": ToolPermission.ALLOW,
 
+    # Safe research verification tools
+    "research_verify_result": ToolPermission.ALLOW,
+    "research_finalize": ToolPermission.ALLOW,
+
+    # Safe final research page confirmation
+    "research_confirm_final_page": ToolPermission.ALLOW,
+    "research_set_offer_url": ToolPermission.ALLOW,
+
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,
     "browser_click": ToolPermission.CONDITIONAL,
@@ -57,6 +66,7 @@ TOOL_PERMISSIONS = {
     "browser_select_option": ToolPermission.CONDITIONAL,
     "browser_tabs": ToolPermission.CONDITIONAL,
     "browser_handle_dialog": ToolPermission.CONDITIONAL,
+    "browser_evaluate": ToolPermission.CONDITIONAL,
 
     # Tools that always need user confirmation
     "open_application": ToolPermission.CONFIRM,
@@ -64,7 +74,7 @@ TOOL_PERMISSIONS = {
     "launch_game": ToolPermission.CONFIRM,
     "browser_file_upload": ToolPermission.CONFIRM,
     "browser_drop": ToolPermission.CONFIRM,
-    "browser_evaluate": ToolPermission.CONFIRM,
+
 
     # Tools that are always blocked
     "browser_run_code_unsafe": ToolPermission.BLOCK,
@@ -98,6 +108,90 @@ SENSITIVE_KEYWORDS = {
     "giriş yap",
     "şifre değiştir",
 }
+
+
+def check_browser_evaluate_safety(
+    arguments: Any,
+) -> SecurityDecision:
+    # Require structured tool arguments
+    if not isinstance(arguments, dict):
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Browser evaluate arguments could not be inspected safely.",
+        )
+
+    function = str(
+        arguments.get("function", "")
+    ).strip()
+
+    if not function:
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Browser evaluate function is empty.",
+        )
+
+    normalized = function.casefold()
+
+    # Block JavaScript that may modify the page, browser state, or external state
+    dangerous_patterns = (
+        "fetch(",
+        "xmlhttprequest",
+        "localstorage",
+        "sessionstorage",
+        "document.cookie",
+        ".click(",
+        ".submit(",
+        ".remove(",
+        ".setattribute(",
+        ".removeattribute(",
+        "document.write",
+        "window.open",
+        "location.href",
+        "location.assign",
+        "location.replace",
+        "history.pushstate",
+        "history.replacestate",
+        "eval(",
+    )
+
+    if any(
+        pattern in normalized
+        for pattern in dangerous_patterns
+    ):
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Browser evaluate may modify browser or page state.",
+        )
+
+    # Keep automatic evaluation limited to simple expression-style reads
+    if any(
+        token in function
+        for token in (";", "{", "}")
+    ):
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Complex browser evaluate code requires confirmation.",
+        )
+
+    # Allow common read-only page text access
+    read_only_patterns = (
+        "innertext",
+        "textcontent",
+    )
+
+    if any(
+        pattern in normalized
+        for pattern in read_only_patterns
+    ):
+        return SecurityDecision(
+            action=SecurityAction.ALLOW,
+            reason="Read-only browser text evaluation.",
+        )
+
+    return SecurityDecision(
+        action=SecurityAction.CONFIRM,
+        reason="Browser evaluate is not recognized as a safe read-only operation.",
+    )
 
 
 def check_url_safety(url: str) -> SecurityDecision | None:
@@ -169,6 +263,10 @@ def evaluate_tool_call(
         tool_name,
         ToolPermission.CONFIRM,
     )
+
+    # Inspect browser evaluate calls separately
+    if tool_name == "browser_evaluate":
+        return check_browser_evaluate_safety(arguments)
 
     # Block dangerous tools
     if permission == ToolPermission.BLOCK:

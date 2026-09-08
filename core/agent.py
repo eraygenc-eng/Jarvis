@@ -37,6 +37,8 @@ class JarvisAgent:
         # Store the active comparison research state
         self.current_comparison_state = None
 
+        MAX_RESEARCH_CONTINUATIONS = 3
+
         # Create tools that can access the active research state
         research_tools = create_research_tools(
             lambda: self.current_comparison_state
@@ -81,9 +83,35 @@ class JarvisAgent:
         task_type = classify_task(prompt)
 
 
-        # Create a research state for comparison tasks
-        if task_type == TaskType.COMPARISON:
-            self.current_comparison_state = await create_comparison_state(prompt, self.llm)
+        # Continue an unfinished comparison across follow-up user messages
+        active_comparison = (
+            self.current_comparison_state is not None
+            and not self.current_comparison_state.is_ready_to_return()
+        )
+
+        if active_comparison:
+            task_type = TaskType.COMPARISON
+
+
+        # Create a new research state only when starting a new comparison
+        if (
+            task_type == TaskType.COMPARISON
+            and not active_comparison
+        ):
+            self.current_comparison_state = await create_comparison_state(
+                prompt,
+                self.llm,
+            )
+
+
+        # Configuration shared across agent calls
+        config = {
+            "configurable": {
+                "thread_id": self.thread_id
+            },
+            # Track LLM and tool execution times
+            "callbacks": [self.timing_callback],
+        }
 
 
         # Sends the user message to the agent.
@@ -105,6 +133,64 @@ class JarvisAgent:
                 "callbacks": [self.timing_callback],
             },
         )
+
+        # Continue comparison research until it is properly finalized
+        if task_type == TaskType.COMPARISON:
+            continuation_count = 0
+
+            while (
+                self.current_comparison_state is not None
+                and not self.current_comparison_state.is_ready_to_return()
+                and continuation_count < self.MAX_RESEARCH_CONTINUATIONS
+            ):
+                continuation_count += 1
+
+                result = await self.agent.ainvoke(
+                    {
+                        "messages": [
+                            (
+                                "user",
+                                (
+                                    "The comparison research is not ready to return yet. "
+                                    "Continue the existing research. Check research_status. "
+                                    "If the strongest candidates are not verified, verify them on their "
+                                    "exact pages using research_verify_result. "
+                                    "If no winner has been finalized, call research_finalize with a "
+                                    "verified winner. "
+                                    "After finalization, navigate to the finalized winner's exact page, "
+                                    "confirm from a fresh browser snapshot that the correct result is "
+                                    "actually visible, and then call research_confirm_final_page. "
+                                    "Do not give the final answer until these steps are complete."
+                                ),
+                            )
+                        ]
+                    },
+                    config=config,
+                )
+
+        # Prevent an unverified comparison from being returned as final
+        if (
+            task_type == TaskType.COMPARISON
+            and self.current_comparison_state is not None
+            and not self.current_comparison_state.is_ready_to_return()
+        ):
+            result = await self.agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "The comparison could not be finalized after the allowed "
+                                "verification attempts. Do not use any more tools. "
+                                "Do not present any unverified result as a confirmed winner. "
+                                "Explain that the strongest candidates could not be "
+                                "sufficiently verified and clearly state the limitation."
+                            ),
+                        }
+                    ]
+                },
+                config=config,
+            )
 
         # Gets the final Jarvis message.
         content = result["messages"][-1].content
