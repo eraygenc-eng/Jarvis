@@ -47,14 +47,18 @@ TOOL_PERMISSIONS = {
     "browser_snapshot": ToolPermission.ALLOW,
     "browser_hover": ToolPermission.ALLOW,
     "browser_wait_for": ToolPermission.ALLOW,
+    
 
     # Safe research verification tools
     "research_verify_result": ToolPermission.ALLOW,
     "research_finalize": ToolPermission.ALLOW,
-
-    # Safe final research page confirmation
+    "research_start_source": ToolPermission.ALLOW,
+    "research_complete_source": ToolPermission.ALLOW,
+    "research_rankings": ToolPermission.ALLOW,
     "research_confirm_final_page": ToolPermission.ALLOW,
     "research_set_offer_url": ToolPermission.ALLOW,
+    "research_confirm_staging_page": ToolPermission.ALLOW,
+    "research_mark_staging_blocked": ToolPermission.ALLOW,
 
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,
@@ -81,33 +85,111 @@ TOOL_PERMISSIONS = {
 }
 
 
-# Keywords that may indicate a sensitive action
-SENSITIVE_KEYWORDS = {
+# Actions that may create an external or irreversible effect
+SENSITIVE_ACTION_KEYWORDS = {
+    # Purchase and payment
+    "purchase",
+    "buy now",
+    "place order",
+    "confirm order",
+    "complete order",
+    "complete purchase",
+    "payment",
+    "pay now",
+    "confirm payment",
+
+    # Booking and reservation
+    "book now",
+    "confirm booking",
+    "complete booking",
+    "reserve now",
+    "confirm reservation",
+
+    # Turkish purchase and payment
+    "satın al",
+    "satin al",
+    "sipariş ver",
+    "siparis ver",
+    "siparişi tamamla",
+    "siparisi tamamla",
+    "ödemeye geç",
+    "odemeye gec",
+    "ödeme yap",
+    "odeme yap",
+    "öde",
+    "ode",
+
+    # Turkish booking and reservation
+    "rezervasyon yap",
+    "rezervasyonu tamamla",
+    "rezervasyonu onayla",
+    "bilet al",
+
+    # Messaging and publishing
+    "send",
+    "publish",
+    "gönder",
+    "gonder",
+    "yayınla",
+    "yayinla",
+
+    # Destructive account actions
     "delete",
     "remove",
-    "purchase",
-    "buy",
-    "checkout",
-    "payment",
-    "pay",
-    "send",
-    "submit",
-    "publish",
     "cancel",
     "unsubscribe",
+    "sil",
+    "iptal",
+
+    # Authentication and credentials
     "login",
     "sign in",
     "change password",
-    "sil",
-    "satın al",
-    "ödeme",
-    "öde",
-    "gönder",
-    "yayınla",
-    "iptal",
     "giriş yap",
+    "giris yap",
     "şifre değiştir",
+    "sifre degistir",
+
+    # Payment credentials
+    "credit card",
+    "debit card",
+    "card number",
+    "cvv",
+    "cvc",
+    "iban",
+    "kart numarası",
+    "kart numarasi",
+    "son kullanma tarihi",
 }
+
+
+def contains_sensitive_action(
+    arguments: Any,
+) -> str | None:
+    # Convert tool arguments into searchable text
+    arguments_text = str(arguments).casefold()
+
+    for keyword in SENSITIVE_ACTION_KEYWORDS:
+        normalized_keyword = keyword.casefold()
+
+        # Multi-word phrases can be matched directly
+        if " " in normalized_keyword:
+            if normalized_keyword in arguments_text:
+                return keyword
+
+            continue
+
+        # Use word boundaries for single words
+        pattern = (
+            rf"(?<!\w)"
+            rf"{re.escape(normalized_keyword)}"
+            rf"(?!\w)"
+        )
+
+        if re.search(pattern, arguments_text):
+            return keyword
+
+    return None
 
 
 def check_browser_evaluate_safety(
@@ -337,7 +419,7 @@ def evaluate_tool_call(
                 reason="Safe browser tab action.",
             )
 
-    # Check sensitive browser actions
+    # Check browser actions that may create an external effect
     if tool_name in {
         "browser_click",
         "browser_press_key",
@@ -346,14 +428,19 @@ def evaluate_tool_call(
         "browser_fill_form",
         "browser_drag",
     }:
-        arguments_text = str(arguments).lower()
+        sensitive_keyword = contains_sensitive_action(
+            arguments
+        )
 
-        for keyword in SENSITIVE_KEYWORDS:
-            if keyword in arguments_text:
-                return SecurityDecision(
-                    action=SecurityAction.CONFIRM,
-                    reason=f"Sensitive action detected: {keyword}",
-                )
+        if sensitive_keyword is not None:
+            return SecurityDecision(
+                action=SecurityAction.CONFIRM,
+                reason=(
+                    "This browser action may create a sensitive "
+                    "or irreversible external effect: "
+                    f"{sensitive_keyword}"
+                ),
+            )
 
     # Allow the action if no risk was found
     return SecurityDecision(
