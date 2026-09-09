@@ -104,15 +104,29 @@ class JarvisAgent:
 
         # Phase 1: source coverage
         if not state.coverage_complete():
+            remaining_sources = [
+                source_state.source
+                for source_state in state.source_states.values()
+                if not source_state.is_terminal()
+            ]
+
             return (
                 "The comparison research is not complete yet. "
-                "Call research_status and continue the remaining "
-                "planned sources. For each source, call "
-                "research_start_source before browsing, collect "
-                "useful distinct offers with research_add_result, "
-                "and call research_complete_source only after the "
-                "source has been researched sufficiently. "
-                "Do not finalize while source coverage is incomplete."
+                f"Remaining sources: {remaining_sources}. "
+                "Continue researching the remaining planned sources one by one. "
+                "For each source, call research_start_source, browse the source thoroughly, "
+                "and store useful distinct offers with research_add_result. "
+                "Before calling research_complete_source, identify the current cheapest "
+                "public and conditional winner candidates for that source. "
+                "Open each current source winner on its exact seller/provider offer page, "
+                "inspect a fresh browser snapshot, and verify the current price, seller, "
+                "variant/model/SKU where applicable, fees, availability, and price conditions "
+                "with research_verify_result(exact_offer=True). "
+                "Only then call research_complete_source. "
+                "If source completion is blocked because another winner candidate still "
+                "needs verification, verify the result IDs reported by the tool and try "
+                "research_complete_source again. "
+                "Do not stop early because one cheap offer has already been found."
             )
 
         # Phase 2: ranking, verification, and winner selection

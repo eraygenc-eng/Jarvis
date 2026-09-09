@@ -238,3 +238,119 @@ def refresh_source_rankings(
         )
     else:
         source_state.best_conditional_result_id = None
+
+
+def find_best_public_for_source(
+    state: ComparisonState,
+    source: str,
+    verified_only: bool = False,
+    strict: bool = False,
+) -> ComparisonResult | None:
+    # Get results collected only from this source
+    candidates = state.get_results_for_source(source)
+
+    if verified_only:
+        candidates = [
+            result
+            for result in candidates
+            if result.verified
+        ]
+
+    candidates = [
+        result
+        for result in candidates
+        if get_public_total(
+            result,
+            strict,
+        ) is not None
+    ]
+
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda result: get_public_total(
+            result,
+            strict,
+        ),
+    )
+
+
+def find_best_conditional_for_source(
+    state: ComparisonState,
+    source: str,
+    verified_only: bool = False,
+    strict: bool = False,
+) -> ComparisonResult | None:
+    # Get results collected only from this source
+    candidates = state.get_results_for_source(source)
+
+    if verified_only:
+        candidates = [
+            result
+            for result in candidates
+            if result.verified
+        ]
+
+    candidates = [
+        result
+        for result in candidates
+        if get_conditional_total(
+            result,
+            strict,
+        ) is not None
+    ]
+
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda result: get_conditional_total(
+            result,
+            strict,
+        ),
+    )
+
+
+def get_unverified_source_winners(
+    state: ComparisonState,
+    source: str,
+) -> list[ComparisonResult]:
+    """
+    Return current source winners that still need exact-page verification.
+    """
+
+    winners = []
+
+    best_public = find_best_public_for_source(
+        state,
+        source,
+    )
+
+    best_conditional = find_best_conditional_for_source(
+        state,
+        source,
+    )
+
+    # Public winner must be verified
+    if (
+        best_public is not None
+        and not best_public.verified
+    ):
+        winners.append(best_public)
+
+    # Conditional winner must also be verified when it is a different offer
+    if (
+        best_conditional is not None
+        and not best_conditional.verified
+        and best_conditional.result_id
+        not in {
+            result.result_id
+            for result in winners
+        }
+    ):
+        winners.append(best_conditional)
+
+    return winners

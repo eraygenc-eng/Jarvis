@@ -14,6 +14,9 @@ from core.research.ranking import (
     get_conditional_total,
     get_public_total,
     refresh_source_rankings,
+    find_best_public_for_source,
+    find_best_conditional_for_source,
+    get_unverified_source_winners,
 )
 from core.research.research_utils import (
     get_canonical_source,
@@ -383,6 +386,30 @@ def create_research_tools(
                 "A completed source needs "
                 "at least one stored result."
             )
+
+        # A completed source must have its current best offers verified
+        if status == SourceStatus.COMPLETED:
+            unverified_winners = get_unverified_source_winners(
+                state,
+                canonical_source,
+            )
+
+            if unverified_winners:
+                result_ids = ", ".join(
+                    result.result_id
+                    for result in unverified_winners
+                    if result.result_id
+                )
+
+                return (
+                    "SOURCE COMPLETION BLOCKED: "
+                    f"{canonical_source} still has unverified "
+                    f"source winner candidates: {result_ids}. "
+                    "Open each candidate's exact seller/provider "
+                    "offer page, verify its current price and "
+                    "details with research_verify_result, then "
+                    "run research_complete_source again."
+                )
 
         if (
             status == SourceStatus.NO_RESULTS
