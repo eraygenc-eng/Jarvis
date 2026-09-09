@@ -139,12 +139,7 @@ async def create_comparison_state(
 
     # Purchasable or bookable comparisons should end
     # at a safe pre-commit transaction stage
-    requires_staging = category in {
-        ResearchCategory.PRODUCT,
-        ResearchCategory.FLIGHT,
-        ResearchCategory.HOTEL,
-        ResearchCategory.CAR_RENTAL,
-    }
+    requires_staging = False
 
     # Create the initial comparison research state
     return ComparisonState(

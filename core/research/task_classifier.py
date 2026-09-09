@@ -64,6 +64,12 @@ TURKISH_SUFFIXES = [
     "lardan",
     "lerden",
 
+    # Common combined possessive / case suffixes
+    "ini",
+    "unu",
+    "sini",
+    "sunu",
+
 
     # Buffer consonant suffixes
     "yi",

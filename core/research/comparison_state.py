@@ -42,6 +42,12 @@ class SourceResearchState:
     # Number of research attempts
     attempts: int = 0
 
+    # Search queries actually tried while discovering offers on this source
+    discovery_queries: list[str] = field(default_factory=list)
+
+    # Optional notes about each discovery attempt
+    discovery_notes: list[str] = field(default_factory=list)
+
     # Why research ended
     completion_reason: str | None = None
 
@@ -55,6 +61,40 @@ class SourceResearchState:
             SourceStatus.NO_RESULTS,
             SourceStatus.BLOCKED,
         }
+
+    def record_discovery_attempt(
+    self,
+    query: str,
+    note: str | None = None,
+    ) -> bool:
+        cleaned_query = " ".join(query.split()).strip()
+
+        if not cleaned_query:
+            return False
+
+        normalized_query = normalize_identity(cleaned_query)
+
+        existing_queries = {
+            normalize_identity(existing_query)
+            for existing_query in self.discovery_queries
+        }
+
+        # Do not count the same search twice
+        if normalized_query in existing_queries:
+            return False
+
+        self.discovery_queries.append(cleaned_query)
+
+        if note:
+            self.discovery_notes.append(note.strip())
+        else:
+            self.discovery_notes.append("")
+
+        return True
+
+
+    def discovery_attempt_count(self) -> int:
+        return len(self.discovery_queries)
 
 
 @dataclass

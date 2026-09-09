@@ -24,6 +24,8 @@ from core.research.ranking import (
     find_best_public,
     find_best_conditional,
     find_best_overall,
+    find_best_public_for_source,
+    find_best_conditional_for_source,
     get_public_total,
     get_conditional_total,
 )
@@ -114,18 +116,46 @@ class JarvisAgent:
                 "The comparison research is not complete yet. "
                 f"Remaining sources: {remaining_sources}. "
                 "Continue researching the remaining planned sources one by one. "
-                "For each source, call research_start_source, browse the source thoroughly, "
-                "and store useful distinct offers with research_add_result. "
-                "Before calling research_complete_source, identify the current cheapest "
-                "public and conditional winner candidates for that source. "
+
+                "For each source, call research_start_source first. "
+                "Then browse that source thoroughly and store useful distinct offers "
+                "with research_add_result. "
+
+                "If a product is not found immediately, do not conclude NO_RESULTS "
+                "after a single search. Use progressively broader discovery queries. "
+                "Start with the exact brand and full model name, then try a shorter "
+                "model identity, then a broader distinctive model-family query. "
+                "For example: "
+                "'Logitech G Pro X Superlight 2' -> "
+                "'G Pro X Superlight 2' -> "
+                "'Superlight'. "
+
+                "After actually performing and inspecting each distinct search, "
+                "call research_record_discovery_attempt with the exact query used. "
+                "Do not record fake or duplicate attempts just to satisfy the minimum. "
+
+                "When broader searches return related products, distinguish the exact "
+                "requested model from different editions, generations, or configurations. "
+                "For example, Superlight 2, Superlight 2 SE, and Superlight 2 DEX "
+                "must not automatically be treated as equivalent. "
+                "Use SKU or model identifiers when visible. "
+
+                "Before calling research_complete_source with COMPLETED, identify the "
+                "current cheapest public and conditional winner candidates for that source. "
                 "Open each current source winner on its exact seller/provider offer page, "
                 "inspect a fresh browser snapshot, and verify the current price, seller, "
                 "variant/model/SKU where applicable, fees, availability, and price conditions "
                 "with research_verify_result(exact_offer=True). "
+
                 "Only then call research_complete_source. "
-                "If source completion is blocked because another winner candidate still "
-                "needs verification, verify the result IDs reported by the tool and try "
-                "research_complete_source again. "
+                "If completion is blocked because another winner candidate still needs "
+                "verification, verify the result IDs reported by the tool and try again. "
+
+                "Only use NO_RESULTS after the required distinct discovery searches were "
+                "genuinely attempted and no matching offer was found. "
+                "If the source itself cannot be accessed or researched reliably, use "
+                "BLOCKED with the real reason instead of NO_RESULTS. "
+
                 "Do not stop early because one cheap offer has already been found."
             )
 
@@ -155,31 +185,6 @@ class JarvisAgent:
                 "browser page has been confirmed."
             )
 
-        # Phase 4: safe transaction staging
-        if (
-            state.requires_staging
-            and not state.staging_finished()
-        ):
-            return (
-                "The finalized winner page is confirmed, but "
-                "transaction staging is still pending. "
-                "Continue toward the normal purchase, checkout, "
-                "booking, or reservation flow for the finalized "
-                "winner. You may perform reversible steps such as "
-                "selecting the verified offer, adding a product to "
-                "the cart, opening the cart, proceeding to checkout, "
-                "or reaching booking or passenger detail pages. "
-                "Stop before payment, placing an order, confirming "
-                "a booking, purchasing a ticket, or another "
-                "irreversible transaction. "
-                "Take a fresh browser snapshot at the safest useful "
-                "pre-commit point and call "
-                "research_confirm_staging_page. "
-                "If staging cannot continue safely because login, "
-                "personal information, payment information, or "
-                "another sensitive requirement is needed, call "
-                "research_mark_staging_blocked instead."
-            )
 
         return (
             "The comparison research is complete and ready "
@@ -195,142 +200,178 @@ class JarvisAgent:
 
         lines = []
 
-        # Build one summary for every planned source
+        # Report every planned source exactly once
         for source in state.planned_sources:
             source_state = state.get_source_state(source)
 
             if source_state is None:
-                continue
-
-            if source_state.status.value == "blocked":
                 lines.append(
-                    f"- {source}: BLOCKED - "
-                    f"{source_state.completion_reason or 'Could not be researched.'}"
+                    f"- {source}: source state unavailable"
                 )
                 continue
 
+            # Source could not be researched
+            if source_state.status.value == "blocked":
+                reason = (
+                    source_state.completion_reason
+                    or "Could not be researched."
+                )
+
+                lines.append(
+                    f"- {source}: BLOCKED - {reason}"
+                )
+                continue
+
+            # No matching result was found
             if source_state.status.value == "no_results":
                 lines.append(
                     f"- {source}: NO MATCHING RESULT"
                 )
                 continue
 
-            source_results = state.get_results_for_source(source)
-
-            public_results = [
-                result
-                for result in source_results
-                if get_public_total(result) is not None
-            ]
-
-            conditional_results = [
-                result
-                for result in source_results
-                if get_conditional_total(result) is not None
-            ]
-
-            best_public = (
-                min(
-                    public_results,
-                    key=get_public_total,
-                )
-                if public_results
-                else None
+            # IMPORTANT:
+            # Final report uses verified results only.
+            best_public = find_best_public_for_source(
+                state,
+                source,
+                verified_only=True,
             )
 
             best_conditional = (
-                min(
-                    conditional_results,
-                    key=get_conditional_total,
+                find_best_conditional_for_source(
+                    state,
+                    source,
+                    verified_only=True,
                 )
-                if conditional_results
-                else None
             )
 
             parts = [f"- {source}:"]
 
             if best_public is not None:
+                public_total = get_public_total(
+                    best_public
+                )
+
                 parts.append(
-                    f"public={get_public_total(best_public)} "
+                    f"verified public={public_total} "
                     f"{best_public.currency or ''}".strip()
                 )
 
+                if best_public.seller:
+                    parts.append(
+                        f"seller={best_public.seller}"
+                    )
+
             if best_conditional is not None:
-                parts.append(
-                    f"conditional={get_conditional_total(best_conditional)} "
-                    f"{best_conditional.currency or ''} "
-                    f"({best_conditional.price_condition})".strip()
+                conditional_total = (
+                    get_conditional_total(
+                        best_conditional
+                    )
                 )
+
+                parts.append(
+                    f"verified conditional="
+                    f"{conditional_total} "
+                    f"{best_conditional.currency or ''}".strip()
+                )
+
+                if best_conditional.price_condition:
+                    parts.append(
+                        f"condition="
+                        f"{best_conditional.price_condition}"
+                    )
+
+                if best_conditional.seller:
+                    parts.append(
+                        f"conditional seller="
+                        f"{best_conditional.seller}"
+                    )
 
             if (
                 best_public is None
                 and best_conditional is None
             ):
                 parts.append(
-                    "price could not be determined"
+                    "NO VERIFIED PRICE"
                 )
 
-            lines.append(" ".join(parts))
-
-        best_public = find_best_public(
-            state,
-            verified_only=False,
-        )
-
-        best_conditional = find_best_conditional(
-            state,
-            verified_only=False,
-        )
+            lines.append(" | ".join(parts))
 
         winner = (
-            state.get_result(state.finalized_result_id)
+            state.get_result(
+                state.finalized_result_id
+            )
             if state.finalized_result_id
             else None
         )
 
         lines.append("")
-        lines.append(
-            "Best public: "
-            + (
-                f"{best_public.source} | "
-                f"{best_public.title} | "
-                f"{get_public_total(best_public)} "
-                f"{best_public.currency or ''}"
-                if best_public
-                else "None"
+
+        if winner is not None:
+            winner_public = get_public_total(
+                winner
             )
-        )
 
-        lines.append(
-            "Best conditional: "
-            + (
-                f"{best_conditional.source} | "
-                f"{best_conditional.title} | "
-                f"{get_conditional_total(best_conditional)} "
-                f"{best_conditional.currency or ''} | "
-                f"{best_conditional.price_condition}"
-                if best_conditional
-                else "None"
+            winner_conditional = (
+                get_conditional_total(
+                    winner
+                )
             )
-        )
 
-        lines.append(
-            "Final verified winner: "
-            + (
-                f"{winner.source} | "
-                f"{winner.title}"
-                if winner
-                else "None"
-            )
-        )
+            winner_prices = []
 
-        lines.append(
-            f"Staging status: {state.staging_status.value}"
-        )
+            if winner_public is not None:
+                winner_prices.append(
+                    f"public={winner_public} "
+                    f"{winner.currency or ''}".strip()
+                )
 
-        if state.staging_notes:
+            if winner_conditional is not None:
+                conditional_text = (
+                    f"conditional={winner_conditional} "
+                    f"{winner.currency or ''}"
+                ).strip()
+
+                if winner.price_condition:
+                    conditional_text += (
+                        f" ({winner.price_condition})"
+                    )
+
+                winner_prices.append(
+                    conditional_text
+                )
+
             lines.append(
-                f"Staging notes: {state.staging_notes}"
+                "FINAL VERIFIED WINNER: "
+                f"{winner.source} | "
+                f"{winner.title} | "
+                + " | ".join(winner_prices)
+            )
+
+            if winner.seller:
+                lines.append(
+                    f"WINNER SELLER: {winner.seller}"
+                )
+
+            if winner.verification_url:
+                lines.append(
+                    "WINNER VERIFIED OFFER URL: "
+                    f"{winner.verification_url}"
+                )
+
+        else:
+            lines.append(
+                "FINAL VERIFIED WINNER: None"
+            )
+
+        lines.append(
+            "FINAL PAGE VERIFIED: "
+            f"{state.final_page_verified}"
+        )
+
+        if state.final_page_url:
+            lines.append(
+                f"FINAL PAGE URL: {state.final_page_url}"
             )
 
         return "\n".join(lines)
@@ -447,7 +488,8 @@ class JarvisAgent:
         if (
             task_type == TaskType.COMPARISON
             and self.current_comparison_state is not None
-            and self.current_comparison_state.is_ready_to_return()
+            and self.current_comparison_state.coverage_complete()
+            and self.current_comparison_state.is_finalized()
         ):
             research_context = (
                 self._build_final_research_context()
@@ -462,16 +504,38 @@ class JarvisAgent:
                                 "The comparison workflow is complete. "
                                 "Do not use any more tools. "
                                 "Give the user the final comparison report "
-                                "using the research data below.\n\n"
-                                "Report every planned source and the best "
-                                "price found there. Clearly distinguish "
-                                "public prices from conditional or membership "
-                                "prices. Mention sources with no result or "
-                                "that could not be researched. Then state the "
-                                "final verified winner and briefly explain "
-                                "where the browser was left. "
-                                "Do not omit the other checked sources just "
-                                "because a winner has already been found.\n\n"
+                                "using ONLY the research data below.\n\n"
+
+                                "MANDATORY OUTPUT RULES:\n"
+                                "- Report EVERY planned source exactly once.\n"
+                                "- Do not omit a source even if it had no result, "
+                                "was blocked, or was more expensive than the winner.\n"
+                                "- For each source, show the best confirmed public price "
+                                "that is available in the research data.\n"
+                                "- If available, also show membership, Premium, coupon, "
+                                "card, loyalty, or other conditional prices separately.\n"
+                                "- Clearly distinguish public prices from conditional prices.\n"
+                                "- If a source has no matching result, say so.\n"
+                                "- If a source could not be researched, say so.\n"
+                                "- Never invent or estimate a price that is not present "
+                                "in the research data.\n"
+                                "- Do not omit the other checked sources just because "
+                                "a winner has already been found.\n\n"
+
+                                "After reporting all sources, clearly state the final "
+                                "verified winner and its price. "
+                                "Mention that the browser has been left open on the "
+                                "winner's exact offer page.\n\n"
+
+                                "TRANSACTION RULES:\n"
+                                "- Do not add the product to the cart automatically.\n"
+                                "- Do not proceed to checkout automatically.\n"
+                                "- Do not begin a booking or reservation automatically.\n"
+                                "- Do not enter payment or personal information.\n"
+                                "- After presenting the comparison, ask the user whether "
+                                "they want you to continue with the purchase, booking, "
+                                "or reservation process.\n\n"
+
                                 "RESEARCH DATA:\n"
                                 f"{research_context}"
                             ),

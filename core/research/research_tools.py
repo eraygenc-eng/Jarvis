@@ -169,6 +169,67 @@ def create_research_tools(
         )
 
     @tool
+    def research_record_discovery_attempt(
+        source: str,
+        query: str,
+        note: str | None = None,
+    ) -> str:
+        """
+        Record one distinct search/discovery attempt made on a research source.
+        """
+
+        state = get_state()
+
+        if state is None:
+            return "NO ACTIVE COMPARISON."
+
+        canonical_source = get_canonical_source(
+            state.planned_sources,
+            source,
+        )
+
+        if canonical_source is None:
+            return (
+                "DISCOVERY ATTEMPT REJECTED: "
+                f"{source} is not a planned source."
+            )
+
+        source_state = state.get_source_state(
+            canonical_source
+        )
+
+        if source_state is None:
+            return (
+                "DISCOVERY ATTEMPT REJECTED: "
+                "Source state could not be found."
+            )
+
+        if source_state.status != SourceStatus.RESEARCHING:
+            return (
+                "DISCOVERY ATTEMPT REJECTED: "
+                f"{canonical_source} must be in RESEARCHING state."
+            )
+
+        added = source_state.record_discovery_attempt(
+            query=query,
+            note=note,
+        )
+
+        if not added:
+            return (
+                "DISCOVERY ATTEMPT NOT COUNTED: "
+                "The query was empty or has already been recorded."
+            )
+
+        return (
+            "DISCOVERY ATTEMPT RECORDED.\n"
+            f"Source: {canonical_source}\n"
+            f"Query: {query.strip()}\n"
+            f"Distinct attempts: "
+            f"{source_state.discovery_attempt_count()}"
+        )
+
+    @tool
     def research_add_result(
         title: str,
         source: str,
@@ -409,6 +470,32 @@ def create_research_tools(
                     "offer page, verify its current price and "
                     "details with research_verify_result, then "
                     "run research_complete_source again."
+                )
+
+        # Do not allow NO_RESULTS after only a shallow search
+        if status == SourceStatus.NO_RESULTS:
+            minimum_discovery_attempts = 3
+
+            discovery_count = (
+                source_state.discovery_attempt_count()
+            )
+
+            if discovery_count < minimum_discovery_attempts:
+                remaining_attempts = (
+                    minimum_discovery_attempts
+                    - discovery_count
+                )
+
+                return (
+                    "SOURCE COMPLETION BLOCKED: "
+                    f"{canonical_source} cannot be marked NO_RESULTS yet. "
+                    f"Only {discovery_count} distinct discovery search(es) "
+                    f"have been recorded. "
+                    f"At least {minimum_discovery_attempts} distinct searches "
+                    f"are required before concluding that no matching result exists. "
+                    f"Try {remaining_attempts} more broader or alternative search "
+                    "queries, inspect the resulting listings, record each attempt "
+                    "with research_record_discovery_attempt, and then try again."
                 )
 
         if (
@@ -954,5 +1041,9 @@ def create_research_tools(
         research_finalize,
         research_confirm_final_page,
         research_confirm_staging_page,
-        research_mark_staging_blocked
+        research_mark_staging_blocked,
+        research_status,
+        research_start_source,
+        research_record_discovery_attempt,
+        research_add_result,
     ]
