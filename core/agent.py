@@ -210,27 +210,43 @@ class JarvisAgent:
                 )
                 continue
 
-            # Source could not be researched
-            if source_state.status.value == "blocked":
-                reason = (
+            # Keep source status separately so that partial prices
+            # are still visible when research becomes blocked.
+            source_status = source_state.status.value
+
+            blocked_reason = None
+
+            if source_status == "blocked":
+                blocked_reason = (
                     source_state.completion_reason
                     or "Could not be researched."
                 )
 
-                lines.append(
-                    f"- {source}: BLOCKED - {reason}"
-                )
-                continue
-
-            # No matching result was found
-            if source_state.status.value == "no_results":
+            # NO_RESULTS should genuinely contain no stored offer.
+            if source_status == "no_results":
                 lines.append(
                     f"- {source}: NO MATCHING RESULT"
                 )
                 continue
 
-            # IMPORTANT:
-            # Final report uses verified results only.
+
+            # Best prices seen during research,
+            # even if exact-page verification failed.
+            observed_public = find_best_public_for_source(
+                state,
+                source,
+                verified_only=False,
+            )
+
+            observed_conditional = (
+                find_best_conditional_for_source(
+                    state,
+                    source,
+                    verified_only=False,
+                )
+            )
+
+            # Final trusted prices use verified results only.
             best_public = find_best_public_for_source(
                 state,
                 source,
@@ -246,6 +262,51 @@ class JarvisAgent:
             )
 
             parts = [f"- {source}:"]
+
+
+            if source_status == "blocked":
+                parts.append(
+                    "status=BLOCKED"
+                )
+
+                if blocked_reason:
+                    parts.append(
+                        f"reason={blocked_reason}"
+                    )
+
+            if observed_public is not None:
+                observed_public_total = get_public_total(
+                    observed_public
+                )
+
+                parts.append(
+                    f"observed public={observed_public_total} "
+                    f"{observed_public.currency or ''}".strip()
+                )
+
+                if observed_public.seller:
+                    parts.append(
+                        f"observed seller={observed_public.seller}"
+                    )
+
+            if observed_conditional is not None:
+                observed_conditional_total = (
+                    get_conditional_total(
+                        observed_conditional
+                    )
+                )
+
+                parts.append(
+                    f"observed conditional="
+                    f"{observed_conditional_total} "
+                    f"{observed_conditional.currency or ''}".strip()
+                )
+
+                if observed_conditional.price_condition:
+                    parts.append(
+                        f"observed condition="
+                        f"{observed_conditional.price_condition}"
+                    )
 
             if best_public is not None:
                 public_total = get_public_total(
@@ -291,9 +352,17 @@ class JarvisAgent:
                 best_public is None
                 and best_conditional is None
             ):
-                parts.append(
-                    "NO VERIFIED PRICE"
-                )
+                if (
+                    observed_public is not None
+                    or observed_conditional is not None
+                ):
+                    parts.append(
+                        "PRICE OBSERVED BUT NOT VERIFIED"
+                    )
+                else:
+                    parts.append(
+                        "NO PRICE OBSERVED"
+                    )
 
             lines.append(" | ".join(parts))
 
@@ -512,6 +581,9 @@ class JarvisAgent:
                                 "was blocked, or was more expensive than the winner.\n"
                                 "- For each source, show the best confirmed public price "
                                 "that is available in the research data.\n"
+                                "- If an observed price exists but could not be verified, "
+                                "show it separately as an observed/unverified price. "
+                                "Never present it as confirmed.\n"
                                 "- If available, also show membership, Premium, coupon, "
                                 "card, loyalty, or other conditional prices separately.\n"
                                 "- Clearly distinguish public prices from conditional prices.\n"

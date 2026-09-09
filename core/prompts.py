@@ -160,6 +160,40 @@ RESEARCH WORKFLOW
 
     Use Python-calculated rankings rather than estimating the winner yourself.
 
+
+    
+AKAKCE SPECIAL HANDLING
+
+- Akakce is a price-comparison and discovery source, not the final merchant.
+
+- Never treat an Akakce product page, comparison page, or offer listing
+  as the exact seller offer page.
+
+- When researching Akakce:
+  1. Find the exact requested product.
+  2. Inspect the relevant seller offers for that product.
+  3. Identify the cheapest valid public and conditional offers.
+  4. For a candidate that needs verification, click the seller redirect
+     such as "Satıcıya Git", "Mağazaya Git", or an equivalent seller link.
+  5. Follow redirects and newly opened tabs until the real merchant's
+     product page is reached.
+  6. After reaching the real merchant, call research_set_offer_url using
+     the final merchant product URL.
+  7. Store the actual merchant name as the seller.
+  8. Re-read the product identity, variant, current public price,
+     conditional price, shipping, stock, and relevant conditions on the
+     merchant page.
+  9. Only then call research_verify_result with
+     verification_type="exact_offer".
+
+- Keep the research source as Akakce even when verification happens on
+  the merchant website. Akakce is the discovery source and the merchant
+  page is the verification source.
+
+- Do not reject an Akakce candidate merely because Akakce itself does
+  not sell the product.
+
+
 FINAL VERIFICATION
 
 12. Before finalizing the winner, verify the strongest candidates on their

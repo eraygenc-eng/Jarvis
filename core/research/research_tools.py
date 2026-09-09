@@ -23,6 +23,7 @@ from core.research.research_utils import (
     is_price_focused_query,
 )
 from core.research.verification import (
+    is_domain_url,
     urls_match,
     validate_money_values,
 )
@@ -554,7 +555,32 @@ def create_research_tools(
                 f"{result_id}"
             )
 
-        result.offer_url = offer_url.strip()
+        cleaned_offer_url = offer_url.strip()
+
+        if not cleaned_offer_url:
+            return (
+                "OFFER URL BLOCKED: "
+                "Offer URL cannot be empty."
+            )
+
+        # Akakce is discovery-only.
+        # Its own pages cannot be exact seller offer pages.
+        if (
+            result.source.casefold() == "akakce"
+            and is_domain_url(
+                cleaned_offer_url,
+                "akakce.com",
+            )
+        ):
+            return (
+                "OFFER URL BLOCKED: "
+                "Akakce is a comparison source, not the merchant. "
+                "Click 'Satıcıya Git' or the equivalent seller link, "
+                "follow the redirect to the real merchant product page, "
+                "then store that final merchant URL."
+            )
+
+        result.offer_url = cleaned_offer_url
 
         state.reset_finalization()
 
@@ -614,6 +640,24 @@ def create_research_tools(
         verification_url = (
             verification_url.strip()
         )
+
+
+        # Akakce cannot itself be an exact merchant offer page.
+        if (
+            result.source.casefold() == "akakce"
+            and is_domain_url(
+                verification_url,
+                "akakce.com",
+            )
+        ):
+            return (
+                "VERIFICATION BLOCKED: "
+                "Akakce is discovery-only. "
+                "Open the real seller page using "
+                "'Satıcıya Git' or the equivalent link "
+                "before exact-offer verification."
+            )
+
 
         if (
             result.offer_url
@@ -1030,20 +1074,16 @@ def create_research_tools(
         )
 
     return [
-        research_status,
-        research_start_source,
-        research_add_result,
-        research_complete_source,
-        research_mark_source_checked,
-        research_set_offer_url,
-        research_verify_result,
-        research_rankings,
-        research_finalize,
-        research_confirm_final_page,
-        research_confirm_staging_page,
-        research_mark_staging_blocked,
-        research_status,
-        research_start_source,
-        research_record_discovery_attempt,
-        research_add_result,
+    research_status,
+    research_start_source,
+    research_record_discovery_attempt,
+    research_add_result,
+    research_complete_source,
+    research_set_offer_url,
+    research_verify_result,
+    research_rankings,
+    research_finalize,
+    research_confirm_final_page,
+    research_confirm_staging_page,
+    research_mark_staging_blocked,
     ]
