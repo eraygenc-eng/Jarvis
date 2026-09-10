@@ -146,6 +146,18 @@ COMPARISON_KEYWORDS = [
     "which is cheaper",
 ]
 
+
+RESEARCH_KEYWORDS = [
+    "araştır",
+    "araştırma yap",
+    "fiyat araştır",
+    "seçenek bul",
+    "research",
+    "search for options",
+    "find options",
+    "look for options",
+]
+
 ACTION_KEYWORDS = [
     # Turkish action phrases
     "satın al",
@@ -171,6 +183,12 @@ ACTION_KEYWORDS = [
 def classify_task(prompt: str) -> TaskType:
     # Check comparison intent first
     for keyword in COMPARISON_KEYWORDS:
+        if contains_keyword(prompt, keyword):
+            return TaskType.COMPARISON
+
+    # A request to research options needs the structured, multi-source workflow
+    # even when the user does not literally say "compare" or "cheapest".
+    for keyword in RESEARCH_KEYWORDS:
         if contains_keyword(prompt, keyword):
             return TaskType.COMPARISON
 

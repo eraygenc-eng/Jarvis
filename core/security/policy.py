@@ -55,11 +55,13 @@ TOOL_PERMISSIONS = {
     "research_start_source": ToolPermission.ALLOW,
     "research_complete_source": ToolPermission.ALLOW,
     "research_rankings": ToolPermission.ALLOW,
+    "research_finish_without_winner": ToolPermission.ALLOW,
     "research_confirm_final_page": ToolPermission.ALLOW,
     "research_set_offer_url": ToolPermission.ALLOW,
     "research_confirm_staging_page": ToolPermission.ALLOW,
     "research_mark_staging_blocked": ToolPermission.ALLOW,
     "research_record_discovery_attempt": ToolPermission.ALLOW,
+    "research_block_verification": ToolPermission.ALLOW,
 
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,

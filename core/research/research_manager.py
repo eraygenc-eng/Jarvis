@@ -27,6 +27,60 @@ def extract_response_text(content) -> str:
     return str(content)
 
 
+async def extract_target_product_semantically(
+    prompt: str,
+    llm: BaseLLM,
+) -> str:
+    # Extract only the product identity from the user's request.
+    extraction_prompt = f"""
+Extract only the specific product identity from the request below.
+
+Rules:
+- Return only the product name or model.
+- Keep brand, model number, generation, and edition when explicitly mentioned.
+- Remove shopping intent such as cheapest, compare, find, search, buy, or look for.
+- Do not add product information that the user did not provide.
+- Do not guess a more complete official product name.
+- Do not include explanations.
+
+Examples:
+
+Request:
+bana Logitech Superlight 2 mouse bak ve en ucuzunu bul
+Answer:
+Logitech Superlight 2
+
+Request:
+RTX 5070 en ucuz nerede
+Answer:
+RTX 5070
+
+Request:
+iPhone 17 Pro 256 GB siyah fiyatlarını karşılaştır
+Answer:
+iPhone 17 Pro 256 GB siyah
+
+Request:
+{prompt}
+
+Answer:
+"""
+
+    response = await llm.get_model().ainvoke(
+        extraction_prompt
+    )
+
+    target_product = extract_response_text(
+        response.content
+    ).strip()
+
+    # Fall back safely when extraction fails.
+    if not target_product:
+        return prompt.strip()
+
+    return target_product
+
+
 
 async def detect_category_semantically(
     prompt: str, 
@@ -118,8 +172,15 @@ async def create_comparison_state(
 
     # Product comparisons may need a second level of classification
     product_type = None
+    target_product = None
 
     if category == ResearchCategory.PRODUCT:
+        # Extract a clean product identity once for the whole research.
+        target_product = await extract_target_product_semantically(
+            prompt,
+            llm,
+        )
+
         # Try the fast keyword-based product type detection first
         product_type = detect_product_type(prompt)
 
@@ -144,6 +205,8 @@ async def create_comparison_state(
     # Create the initial comparison research state
     return ComparisonState(
         query=prompt,
+        category=category.value,
+        target_product=target_product,
         planned_sources=sources,
         requires_staging=requires_staging,
     )

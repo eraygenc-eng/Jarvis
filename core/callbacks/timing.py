@@ -82,6 +82,11 @@ class TimingCallback(BaseCallbackHandler):
         self.tool_start_times[run_id] = time.perf_counter()
         self.tool_names[run_id] = tool_name
 
+        # Show structured research inputs during debugging.
+        if tool_name.startswith("research_"):
+            print(f"\n[Research input] {tool_name}")
+            print(input_str)
+
     def on_tool_end(
         self,
         output,
@@ -95,6 +100,14 @@ class TimingCallback(BaseCallbackHandler):
             run_id,
             "unknown_tool",
         )
+
+
+        # Show validation decisions and stored research data.
+        if tool_name.startswith("research_"):
+            content = getattr(output, "content", output)
+
+            print(f"\n[Research output] {tool_name}")
+            print(content)
 
         if start_time is not None:
             elapsed_time = time.perf_counter() - start_time

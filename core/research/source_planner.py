@@ -289,8 +289,9 @@ def plan_sources(
     if category in CATEGORY_SOURCES:
         return CATEGORY_SOURCES[category].copy()
 
-    # General comparisons will use semantic fallback
-    return []
+    # Keep semantic/general comparisons actionable instead of creating an empty
+    # plan that can never reach terminal coverage.
+    return ["Web Search"]
 
 
 def detect_product_type(prompt: str) -> ProductType:

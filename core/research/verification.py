@@ -1,4 +1,9 @@
+import re
+
 from urllib.parse import parse_qsl, unquote, urlparse
+
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 
 
 # Query parameters that can identify a specific product,
@@ -27,6 +32,22 @@ OFFER_IDENTITY_KEYS = {
     "listing_id",
     "offerid",
     "offer_id",
+    "renk",
+    "color",
+    "size",
+    "checkin",
+    "checkout",
+    "departure",
+    "return",
+    "adults",
+    "children",
+    "rooms",
+}
+
+# A seller identifies a business, not a specific product or booking.
+PRODUCT_IDENTITY_KEYS = {
+    "productid", "product_id", "itemid", "item_id", "sku", "skuid",
+    "sku_id", "listingid", "listing_id", "offerid", "offer_id",
 }
 
 
@@ -77,6 +98,14 @@ def urls_match(
     expected = urlparse(expected_url.strip())
     current = urlparse(current_url.strip())
 
+    if (
+        expected.scheme not in {"http", "https"}
+        or current.scheme not in {"http", "https"}
+        or not expected.hostname or not current.hostname
+        or expected.username or current.username
+    ):
+        return False
+
     expected_host = normalize_host(expected.netloc)
     current_host = normalize_host(current.netloc)
 
@@ -98,9 +127,9 @@ def urls_match(
         & current_identity.keys()
     )
 
-    for key in shared_keys:
-        if expected_identity[key] != current_identity[key]:
-            return False
+    # Losing a seller, variant or booking parameter is not proof of identity.
+    if expected_identity != current_identity:
+        return False
 
     # Normal case: same merchant and same product path.
     if expected_path == current_path:
@@ -109,7 +138,7 @@ def urls_match(
     # Some websites change the slug or canonical path
     # after navigation. Allow this only when there is
     # a strong matching identity parameter.
-    if shared_keys:
+    if shared_keys & PRODUCT_IDENTITY_KEYS:
         return True
 
     return False
@@ -138,9 +167,74 @@ def validate_money_values(
         if value is None:
             continue
 
+        if not isfinite(value):
+            return f"{name} must be finite."
+
         if value < 0:
             return (
                 f"{name} cannot be negative."
             )
+
+    return None
+
+
+
+def validate_observed_amount(
+    excerpt: str,
+    amount_text: str,
+    expected_value: float,
+    decimal_separator: str,
+) -> str | None:
+    """Match a numeric amount in an excerpt to the supplied value."""
+
+    if decimal_separator not in {".", ","}:
+        return "Decimal separator must be '.' or ','."
+
+    # Ignore spaces used for formatting or digit grouping.
+    token = "".join(amount_text.split())
+    compact_excerpt = "".join(excerpt.split())
+
+    if not token:
+        return "The observed numeric amount is missing."
+
+    group_separator = "," if decimal_separator == "." else "."
+
+    decimal = re.escape(decimal_separator)
+    group = re.escape(group_separator)
+
+    # Accept plain digits or correctly grouped thousands.
+    number_pattern = (
+        rf"(?:[0-9]+|[0-9]{{1,3}}(?:{group}[0-9]{{3}})+)"
+        rf"(?:{decimal}[0-9]{{1,2}})?"
+    )
+
+    if re.fullmatch(number_pattern, token) is None:
+        return "The amount does not match the declared number format."
+
+    # Do not accept a substring of a larger numeric amount.
+    occurrence_pattern = (
+        rf"(?<![\d.,]){re.escape(token)}(?![\d.,])"
+    )
+
+    if re.search(occurrence_pattern, compact_excerpt) is None:
+        return "The numeric amount does not occur in the page excerpt."
+
+    normalized = token.replace(group_separator, "")
+    normalized = normalized.replace(decimal_separator, ".")
+
+    try:
+        observed = Decimal(normalized)
+        expected = Decimal(str(expected_value))
+    except (InvalidOperation, ValueError):
+        return "The amount could not be parsed."
+
+    if not observed.is_finite() or not expected.is_finite():
+        return "The amount must be finite."
+
+    if observed != expected:
+        return (
+            f"Observed amount is {observed}, "
+            f"but the supplied value is {expected}."
+        )
 
     return None

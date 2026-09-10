@@ -19,7 +19,11 @@ async def main():
     browser_tools = browser.get_tools()
 
     # Create Jarvis with browser tools
-    agent = JarvisAgent(llm, browser_tools)
+    agent = JarvisAgent(
+        llm,
+        browser_tools,
+        observation_store=browser.observations,
+    )
 
     print("Jarvis is ready. Type 'exit' to quit.")
 

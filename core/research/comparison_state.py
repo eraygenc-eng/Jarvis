@@ -13,6 +13,20 @@ class SourceStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class VerificationStatus(str, Enum):
+    # The offer still needs verification.
+    PENDING = "pending"
+
+    # The exact offer was verified.
+    VERIFIED = "verified"
+
+    # Verification was attempted but could not be completed.
+    BLOCKED = "blocked"
+
+    # The offer was checked and found unsuitable.
+    REJECTED = "rejected"
+
+
 class StagingStatus(str, Enum):
     # This comparison does not need transaction staging
     NOT_REQUIRED = "not_required"
@@ -107,11 +121,35 @@ class ComparisonResult:
 
     # Verification
     verified: bool = False
+
+    # Track verification separately from source research.
+    verification_status: VerificationStatus = VerificationStatus.PENDING
+
+    # Explain why verification was blocked or the offer was rejected.
+    verification_reason: str | None = None
     verification_notes: str | None = None
     verified_details: dict[str, Any] = field(
         default_factory=dict
     )
     verification_url: str | None = None
+
+    # Identify the browser observation used for verification.
+    verification_observation_id: str | None = None
+
+    # Preserve the exact excerpt used as price evidence.
+    verification_price_evidence: str | None = None
+
+    # Keep discovery and subsequent price changes available to the report.
+    price_history: list[dict[str, Any]] = field(default_factory=list)
+    verification_offer_ref: str | None = None
+    verification_identity_evidence: str | None = None
+    verification_seller_evidence: str | None = None
+
+    # A comparable quote covers the complete requested purchase/stay/trip/rental.
+    price_scope: str = "unknown"
+    scope_evidence: str | None = None
+    mandatory_fees: float | None = None
+    fees_included: bool = False
 
     # Identity
     model: str | None = None
@@ -141,6 +179,22 @@ class ComparisonResult:
     details: dict[str, Any] = field(
         default_factory=dict
     )
+
+    def invalidate_verification(self) -> None:
+        """Clear verification while retaining observed offer data."""
+
+        self.verified = False
+        self.verification_status = VerificationStatus.PENDING
+        self.verification_reason = None
+        self.verification_url = None
+        self.verification_observation_id = None
+        self.verification_price_evidence = None
+        self.verification_offer_ref = None
+        self.verification_identity_evidence = None
+        self.verification_seller_evidence = None
+        self.verification_notes = None
+        self.verified_details = {}
+
 
     def matches_identity(
         self,
@@ -176,6 +230,11 @@ class ComparisonState:
     # Original user request
     query: str
 
+    category: str = "general"
+
+    # Clean product identity extracted from the request
+    target_product: str | None = None
+
     # Comparison criteria
     criteria: dict[str, Any] = field(
         default_factory=dict
@@ -204,11 +263,13 @@ class ComparisonState:
 
     # Final result
     finalized_result_id: str | None = None
+    finished_without_winner_reason: str | None = None
 
     # Final browser location
     final_page_verified: bool = False
     final_page_url: str | None = None
     final_page_notes: str | None = None
+    final_page_observation_id: str | None = None
 
     # Whether Jarvis should move toward checkout/booking after finalization
     requires_staging: bool = False
@@ -374,7 +435,7 @@ class ComparisonState:
         return [
             result
             for result in self.results
-            if result.verified
+            if result.verified and result.verification_status == VerificationStatus.VERIFIED
         ]
 
     def has_verified_results(self) -> bool:
@@ -386,7 +447,7 @@ class ComparisonState:
     ) -> ComparisonResult | None:
         result = self.get_result(result_id)
 
-        if result is None or not result.verified:
+        if result is None or not result.verified or result.verification_status != VerificationStatus.VERIFIED:
             return None
 
         return result
@@ -446,6 +507,21 @@ class ComparisonState:
     
 
     def is_ready_to_return(self) -> bool:
+        pending_exists = any(
+            result.verification_status == VerificationStatus.PENDING
+            for result in self.results
+        )
+
+        if not self.coverage_complete() or pending_exists:
+            return False
+
+        # No inventory and unsuccessful verification are valid research outcomes.
+        if not self.has_verified_results():
+            return True
+
+        if self.finished_without_winner_reason:
+            return True
+
         return (
             self.is_finalized()
             and self.final_page_verified
@@ -454,11 +530,13 @@ class ComparisonState:
 
     def reset_finalization(self) -> None:
         self.finalized_result_id = None
+        self.finished_without_winner_reason = None
 
         # Reset final verified page
         self.final_page_verified = False
         self.final_page_url = None
         self.final_page_notes = None
+        self.final_page_observation_id = None
 
         # Reset transaction staging
         self.staging_url = None

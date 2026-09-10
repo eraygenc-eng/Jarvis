@@ -1,3 +1,5 @@
+import json
+
 from typing import Callable
 
 from langchain_core.tools import tool
@@ -6,6 +8,7 @@ from core.research.comparison_state import (
     ComparisonResult,
     ComparisonState,
     SourceStatus,
+    VerificationStatus,
 )
 from core.research.ranking import (
     find_best_conditional,
@@ -17,14 +20,24 @@ from core.research.ranking import (
     find_best_public_for_source,
     find_best_conditional_for_source,
     get_unverified_source_winners,
+    get_pending_verifications,
+    normalize_currency,
+    no_winner_reason,
 )
+
+from core.research.evidence import ObservationStore
+from core.research.offer_verification import OfferQuote, validate_quote, apply_quote, quote_prices
+
 from core.research.research_utils import (
     get_canonical_source,
+    get_product_identity_conflict,
     is_price_focused_query,
+    url_belongs_to_source,
+    normalize_price_condition,
 )
+
 from core.research.verification import (
     is_domain_url,
-    urls_match,
     validate_money_values,
 )
 
@@ -34,6 +47,7 @@ def create_research_tools(
         [],
         ComparisonState | None,
     ],
+    observation_store: ObservationStore,
 ) -> list:
 
     def describe_result(
@@ -92,7 +106,27 @@ def create_research_tools(
             )
         ]
 
+        # Keep unresolved offers visible even when their source is closed.
+        pending_lines = []
+
+        for result in get_pending_verifications(state):
+            pending_lines.append(
+                f"- {describe_result(result)} | "
+                f"currency={result.currency or 'unknown'} | "
+                f"seller={result.seller or 'unknown'} | "
+                f"offer_url={result.offer_url or 'unknown'} | "
+                f"discovery_url={result.url or 'unknown'}"
+            )
+
+        pending_summary = (
+            "\n".join(pending_lines)
+            if pending_lines
+            else "None"
+        )
+
         return (
+            f"Category: {state.category}\n"
+            f"Target product: {state.target_product}\n"
             f"Coverage complete: "
             f"{state.coverage_complete()}\n"
             f"Remaining sources: {remaining}\n"
@@ -109,6 +143,8 @@ def create_research_tools(
             f"Ready to return: "
             f"{state.is_ready_to_return()}\n\n"
             + "\n".join(source_lines)
+            + "\n\nPENDING OFFER VERIFICATIONS:\n"
+            + pending_summary
         )
 
     @tool
@@ -285,6 +321,39 @@ def create_research_tools(
                 "Call research_start_source first."
             )
 
+        # Direct sources may only contribute offers
+        # discovered on their own website.
+        if (
+            url
+            and not url_belongs_to_source(
+                canonical_source,
+                url,
+            )
+        ):
+            return (
+                "RESULT BLOCKED: "
+                f"The result URL does not belong to "
+                f"{canonical_source}. "
+                "Research this source directly instead of using "
+                "another marketplace, search engine, or snippet."
+            )
+
+        # Product identity validation applies only
+        # to product comparison tasks.
+        if state.target_product:
+            identity_conflict = get_product_identity_conflict(
+                state.target_product,
+                title,
+            )
+
+            if identity_conflict:
+                return (
+                    "RESULT BLOCKED: "
+                    "Product identity does not match the user's request. "
+                    f"Reason: {identity_conflict}"
+                )
+
+
         money_error = validate_money_values(
             regular_price=regular_price,
             price=price,
@@ -298,6 +367,8 @@ def create_research_tools(
             return (
                 f"RESULT BLOCKED: {money_error}"
             )
+
+        price_condition = normalize_price_condition(price_condition)
 
         if (
             conditional_total is not None
@@ -580,6 +651,9 @@ def create_research_tools(
                 "then store that final merchant URL."
             )
 
+        if result.offer_url != cleaned_offer_url:
+            result.invalidate_verification()
+
         result.offer_url = cleaned_offer_url
 
         state.reset_finalization()
@@ -589,209 +663,161 @@ def create_research_tools(
             f"{result.result_id}."
         )
 
+
     @tool
     def research_verify_result(
         result_id: str,
-        verification_url: str,
-        verification_type: str,
-        verification_notes: str | None = None,
-        price: float | None = None,
-        regular_price: float | None = None,
-        price_condition: str | None = None,
-        seller: str | None = None,
-        shipping_cost: float | None = None,
-        currency: str | None = None,
-        variant: str | None = None,
-        sku: str | None = None,
-        effective_total: float | None = None,
-        public_total: float | None = None,
-        conditional_total: float | None = None,
-        verified_details: dict | None = None,
+        observation_id: str,
+        quote: OfferQuote,
     ) -> str:
-        """Verify a result on its exact offer page."""
+        """Verify ONE seller/provider offer against a fresh browser_snapshot.
 
+        Store its exact offer URL first. Quote evidence must come from the
+        selected offer subtree, with price node references and seller evidence.
+        Covers products, flights, hotels, rentals and other purchasable offers.
+        """
         state = get_state()
-
         if state is None:
-            return (
-                "VERIFICATION BLOCKED: "
-                "No active comparison research."
-            )
-
-        result = state.get_result(
-            result_id.strip()
-        )
-
+            return "VERIFICATION BLOCKED: No active comparison research."
+        result = state.get_result(result_id.strip())
         if result is None:
-            return (
-                "VERIFICATION BLOCKED: "
-                "Result not found."
-            )
+            return "VERIFICATION BLOCKED: Result not found."
 
-        if (
-            verification_type.strip().lower()
-            != "exact_offer"
-        ):
-            return (
-                "VERIFICATION BLOCKED: "
-                "Exact offer page required."
-            )
-
-        verification_url = (
-            verification_url.strip()
-        )
-
-
-        # Akakce cannot itself be an exact merchant offer page.
-        if (
-            result.source.casefold() == "akakce"
-            and is_domain_url(
-                verification_url,
-                "akakce.com",
-            )
-        ):
-            return (
-                "VERIFICATION BLOCKED: "
-                "Akakce is discovery-only. "
-                "Open the real seller page using "
-                "'Satıcıya Git' or the equivalent link "
-                "before exact-offer verification."
-            )
-
-
-        if (
-            result.offer_url
-            and not urls_match(
-                result.offer_url,
-                verification_url,
-            )
-        ):
-            return (
-                "VERIFICATION BLOCKED: "
-                "Current page does not match "
-                "the stored offer URL."
-            )
-
-        money_error = validate_money_values(
-            price=price,
-            regular_price=regular_price,
-            shipping_cost=shipping_cost,
-            effective_total=effective_total,
-            public_total=public_total,
-            conditional_total=conditional_total,
-        )
-
-        if money_error:
-            return (
-                f"VERIFICATION BLOCKED: "
-                f"{money_error}"
-            )
-
+        previous = quote_prices(result)
+        result.invalidate_verification()
         state.reset_finalization()
+        try:
+            observation = observation_store.require_current(observation_id)
+            validate_quote(state, result, observation, quote)
+        except ValueError as error:
+            refresh_source_rankings(state, result.source)
+            return f"VERIFICATION BLOCKED: {error}"
 
-        if price is not None:
-            result.price = price
-
-        if regular_price is not None:
-            result.regular_price = regular_price
-
-        if price_condition is not None:
-            condition = price_condition.strip()
-
-            result.price_condition = (
-                condition if condition else None
-            )
-
-        if seller is not None:
-            result.seller = seller.strip()
-
-        if shipping_cost is not None:
-            result.shipping_cost = shipping_cost
-
-        if currency is not None:
-            result.currency = currency.strip()
-
-        if variant is not None:
-            result.variant = variant.strip()
-
-        if sku is not None:
-            result.sku = sku.strip()
-
-        if effective_total is not None:
-            result.effective_total = effective_total
-
-        if public_total is not None:
-            result.public_total = public_total
-
-        if conditional_total is not None:
-            result.conditional_total = (
-                conditional_total
-            )
-
-        if verified_details is not None:
-            result.verified_details = (
-                verified_details.copy()
-            )
-
-        result.verified = True
-        result.verification_url = (
-            verification_url
-        )
-
-        result.verification_notes = (
-            verification_notes.strip()
-            if verification_notes
-            else None
-        )
-
-        refresh_source_rankings(
-            state,
-            result.source,
-        )
-
+        apply_quote(result, observation, quote)
+        refresh_source_rankings(state, result.source)
         return (
-            f"VERIFIED RESULT: "
-            f"{result.result_id}\n"
-            f"Public total: "
-            f"{get_public_total(result)}\n"
-            f"Conditional total: "
-            f"{get_conditional_total(result)}"
+            f"VERIFIED RESULT: {result.result_id}\n"
+            f"Previous observation: {json.dumps(previous, ensure_ascii=False)}\n"
+            f"Current observation: {json.dumps(quote_prices(result), ensure_ascii=False)}\n"
+            f"Comparable public total: {get_public_total(result, strict=True)}\n"
+            f"Comparable conditional total: {get_conditional_total(result, strict=True)}\n"
+            "Use current amounts in rankings. Missing comparable totals remain provisional."
         )
 
     @tool
-    def research_rankings(
-        verified_only: bool = False,
+    def research_block_verification(
+        result_id: str,
+        attempted_url: str,
+        reason: str,
+        observed_evidence: str,
     ) -> str:
-        """Return Python-calculated comparison rankings."""
+        """
+        Record an unsuccessful offer verification attempt.
+
+        Use only after actually attempting verification.
+        Not starting or not finishing verification is not a blocker.
+        Include the attempted URL and the observed failure.
+        """
 
         state = get_state()
 
         if state is None:
             return "No active comparison research."
 
-        public = find_best_public(
-            state,
-            verified_only,
+        result = state.get_result(result_id.strip())
+
+        if result is None:
+            return "VERIFICATION UPDATE REJECTED: Result not found."
+
+        if result.verification_status != VerificationStatus.PENDING:
+            return (
+                "VERIFICATION UPDATE REJECTED: "
+                "Only pending offers can be marked blocked."
+            )
+
+        attempted_url = attempted_url.strip()
+        reason = reason.strip()
+        observed_evidence = observed_evidence.strip()
+
+        if not attempted_url or not reason or not observed_evidence:
+            return (
+                "VERIFICATION UPDATE REJECTED: "
+                "Provide the attempted URL, reason, and observed failure."
+            )
+
+        # Preserve the observed offer and record the failed attempt.
+        result.verified = False
+        result.verification_status = VerificationStatus.BLOCKED
+        result.verification_reason = reason
+
+        result.details.setdefault(
+            "verification_failures", []
+        ).append(
+            {
+                "attempted_url": attempted_url,
+                "reason": reason,
+                "observed_evidence": observed_evidence,
+            }
         )
 
-        conditional = find_best_conditional(
-            state,
-            verified_only,
-        )
-
-        overall = find_best_overall(
-            state,
-            verified_only,
-        )
+        state.reset_finalization()
+        refresh_source_rankings(state, result.source)
 
         return (
-            f"Best public:\n"
-            f"{describe_result(public)}\n\n"
-            f"Best conditional:\n"
-            f"{describe_result(conditional)}\n\n"
-            f"Best overall:\n"
-            f"{describe_result(overall)}"
+            f"VERIFICATION BLOCKED: {result.result_id}\n"
+            f"Reason: {reason}\n"
+            "The observed price is preserved but remains unverified."
         )
+
+
+
+
+    @tool
+    def research_rankings(
+        verified_only: bool = False,
+    ) -> str:
+        """Return rankings grouped by currency; verified rankings require full totals."""
+        state = get_state()
+        if state is None:
+            return "No active comparison research."
+
+        lines = [
+            f"Verified only: {verified_only}",
+            "Conditional prices are alternatives; eligibility is not assumed.",
+        ]
+        for currency in sorted({normalize_currency(item.currency) or "UNKNOWN" for item in state.results}):
+            lines.append(f"Currency: {currency}")
+            if currency == "UNKNOWN":
+                lines.append("Unknown currency: offers cannot be price-ranked.")
+                continue
+            lines.extend([
+                f"Best public: {describe_result(find_best_public(state, verified_only, currency=currency))}",
+                f"Best conditional: {describe_result(find_best_conditional(state, verified_only, currency=currency))}",
+            ])
+        winner = find_best_overall(state, verified_only)
+        lines.append(f"Overall public winner: {describe_result(winner)}")
+        if verified_only and winner is None:
+            lines.append(f"No overall winner: {no_winner_reason(state)}")
+        return "\n".join(lines)
+
+    @tool
+    def research_finish_without_winner() -> str:
+        """Finish resolved research when no comparable public winner can be established.
+
+        All planned sources and pending offer investigations must be resolved first.
+        Retains every offer for a partial report or a report of no matching results.
+        """
+        state = get_state()
+        if state is None:
+            return "No active comparison research."
+        if not state.coverage_complete() or get_pending_verifications(state):
+            return "FINISH BLOCKED: Resolve remaining sources and pending offers first."
+        reason = no_winner_reason(state)
+        if reason is None:
+            return "FINISH BLOCKED: A comparable public winner is available. Finalize it."
+        state.reset_finalization()
+        state.finished_without_winner_reason = reason
+        return f"RESEARCH FINISHED WITHOUT WINNER: {reason}"
 
     @tool
     def research_finalize(
@@ -806,6 +832,27 @@ def create_research_tools(
                 "FINALIZATION BLOCKED: "
                 "No active research."
             )
+
+        # Resolve pending offers before finalizing the comparison.
+        pending = get_pending_verifications(state)
+
+        if pending:
+            pending_ids = ", ".join(
+                result.result_id
+                for result in pending
+                if result.result_id
+            )
+
+            return (
+                "FINALIZATION BLOCKED: "
+                f"Offers still need verification: {pending_ids}. "
+                "Inspect their exact seller/provider pages. "
+                "Use research_verify_result for successful verification. "
+                "If an actual attempt fails, record the observed failure "
+                "with research_block_verification. "
+                "An unfinished task alone is not a verification blocker."
+            )
+
 
         if not state.coverage_complete():
             return (
@@ -822,6 +869,10 @@ def create_research_tools(
                 "FINALIZATION BLOCKED: "
                 "Winner is not verified."
             )
+
+        reason = no_winner_reason(state)
+        if reason or get_public_total(winner, strict=True) is None:
+            return f"FINALIZATION BLOCKED: {reason or 'Winner has no comparable public total.'}"
 
         if is_price_focused_query(state.query):
             cheapest = find_best_overall(
@@ -856,81 +907,67 @@ def create_research_tools(
         state.final_page_verified = False
         state.final_page_url = None
         state.final_page_notes = None
+        state.finished_without_winner_reason = None
 
         return (
             f"FINALIZATION APPROVED: "
             f"{winner.result_id}"
         )
 
+
     @tool
     def research_confirm_final_page(
         result_id: str,
-        final_page_url: str,
-        final_page_notes: str | None = None,
+        observation_id: str,
+        quote: OfferQuote,
     ) -> str:
-        """Confirm the browser is on the winner page."""
+        """Recheck the finalized offer using a NEW browser_snapshot and fresh quote.
 
+        Provide the same evidence structure as research_verify_result. A changed
+        price invalidates finalization and requires ranking again.
+        """
         state = get_state()
+        if state is None or not state.is_finalized():
+            return "FINAL PAGE BLOCKED: Research is not finalized."
+        if state.finalized_result_id != result_id.strip():
+            return "FINAL PAGE BLOCKED: Wrong result."
+        winner = state.get_verified_result(result_id.strip())
+        state.final_page_verified = False
+        state.final_page_url = None
+        state.final_page_observation_id = None
+        try:
+            observation = observation_store.require_current(observation_id)
+            if observation.observation_id == winner.verification_observation_id:
+                return "FINAL PAGE BLOCKED: Take a new browser_snapshot after finalization."
+            validate_quote(state, winner, observation, quote)
+        except ValueError as error:
+            winner.invalidate_verification()
+            state.reset_finalization()
+            return f"FINAL PAGE BLOCKED: {error}"
 
-        if state is None:
+        previous = quote_prices(winner)
+        winner.invalidate_verification()
+        state.reset_finalization()
+        apply_quote(winner, observation, quote)
+        refresh_source_rankings(state, winner.source)
+        if previous != quote_prices(winner):
             return (
-                "FINAL PAGE BLOCKED: "
-                "No active research."
+                "FINAL PAGE CHANGED: Fresh prices were stored. "
+                "Call research_rankings and research_finalize again. "
+                f"Previous: {json.dumps(previous, ensure_ascii=False)}; "
+                f"Current: {json.dumps(quote_prices(winner), ensure_ascii=False)}"
             )
+        if is_price_focused_query(state.query):
+            best = find_best_overall(state, verified_only=True)
+            if best is None or best.result_id != winner.result_id:
+                return "FINAL PAGE CHANGED: Recalculate the public winner before finalization."
 
-        if not state.is_finalized():
-            return (
-                "FINAL PAGE BLOCKED: "
-                "Research is not finalized."
-            )
-
-        if (
-            state.finalized_result_id
-            != result_id.strip()
-        ):
-            return (
-                "FINAL PAGE BLOCKED: "
-                "Wrong result."
-            )
-
-        winner = state.get_verified_result(
-            state.finalized_result_id
-        )
-
-        if (
-            winner is None
-            or winner.verification_url is None
-        ):
-            return (
-                "FINAL PAGE BLOCKED: "
-                "Winner has no verification URL."
-            )
-
-        final_page_url = final_page_url.strip()
-
-        if not urls_match(
-            winner.verification_url,
-            final_page_url,
-        ):
-            return (
-                "FINAL PAGE BLOCKED: "
-                "Browser is not on the "
-                "verified winner page."
-            )
-
+        state.finalized_result_id = winner.result_id
         state.final_page_verified = True
-        state.final_page_url = final_page_url
-
-        state.final_page_notes = (
-            final_page_notes.strip()
-            if final_page_notes
-            else None
-        )
-
-        return (
-            f"FINAL PAGE CONFIRMED: "
-            f"{result_id}"
-        )
+        state.final_page_url = observation.page_url
+        state.final_page_observation_id = observation.observation_id
+        state.final_page_notes = quote.notes
+        return f"FINAL PAGE CONFIRMED: {winner.result_id}"
 
     @tool
     def research_confirm_staging_page(
@@ -1082,8 +1119,10 @@ def create_research_tools(
     research_set_offer_url,
     research_verify_result,
     research_rankings,
+    research_finish_without_winner,
     research_finalize,
     research_confirm_final_page,
     research_confirm_staging_page,
     research_mark_staging_blocked,
+    research_block_verification
     ]
