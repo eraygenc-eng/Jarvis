@@ -62,6 +62,7 @@ TOOL_PERMISSIONS = {
     "research_mark_staging_blocked": ToolPermission.ALLOW,
     "research_record_discovery_attempt": ToolPermission.ALLOW,
     "research_block_verification": ToolPermission.ALLOW,
+    "research_read_observation": ToolPermission.ALLOW,
 
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,

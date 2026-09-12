@@ -402,6 +402,68 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(events, [("start", "navigate"), ("end", "navigate"), ("start", "click"), ("end", "click")])
 
+    def test_archived_observation_can_be_read_without_becoming_current(self):
+        from core.security.policy import (
+            SecurityAction,
+            evaluate_tool_call,
+        )
+
+        f = ResearchFixture()
+
+        payload = f.capture()
+        observation_id = payload["observation_id"]
+
+        # Simulate moving away from the page.
+        f.store.invalidate_current()
+
+        self.assertIsNone(
+            f.store.current_observation_id
+        )
+
+        response = f.tools[
+            "research_read_observation"
+        ].invoke(
+            {
+                "observation_id": observation_id,
+                "offer_ref": "offer",
+            }
+        )
+
+        self.assertIn(
+            "ARCHIVED BROWSER OBSERVATION",
+            response,
+        )
+        self.assertIn(
+            observation_id,
+            response,
+        )
+        self.assertIn(
+            "Price: 6000.00 TRY",
+            response,
+        )
+
+        # Reading archived evidence must not make it current again.
+        self.assertIsNone(
+            f.store.current_observation_id
+        )
+
+        with self.assertRaises(ValueError):
+            f.store.require_current(
+                observation_id
+            )
+
+        decision = evaluate_tool_call(
+            "research_read_observation",
+            {
+                "observation_id": observation_id,
+            },
+        )
+
+        self.assertEqual(
+            decision.action,
+            SecurityAction.ALLOW,
+        )
+
 
 class AgentReportTests(unittest.IsolatedAsyncioTestCase):
     def test_progress_signature_tracks_all_planned_sources_and_offer_changes(self):

@@ -33,6 +33,8 @@ from core.research.research_tools import (
 
 from core.research.evidence import ObservationStore
 
+from core.browser_context import create_browser_context_middleware
+
 
 from core.research.ranking import (
     find_best_public,
@@ -90,6 +92,12 @@ class JarvisAgent:
         # Measure model and tool execution times
         self.timing_callback = TimingCallback()
 
+        browser_context_middleware = (
+            create_browser_context_middleware(
+                observation_store
+            )
+        )
+
         @before_model(can_jump_to=["end"])
         def research_completion_guard(state, runtime):
             context = runtime.context
@@ -132,6 +140,7 @@ class JarvisAgent:
                 request_prompt,
                 security_middleware,
                 research_completion_guard,
+                browser_context_middleware,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 ),

@@ -25,7 +25,11 @@ from core.research.ranking import (
     no_winner_reason,
 )
 
-from core.research.evidence import ObservationStore
+from core.research.evidence import (
+    ObservationStore,
+    get_snapshot_subtree,
+)
+
 from core.research.offer_verification import OfferQuote, validate_quote, apply_quote, quote_prices
 
 from core.research.research_utils import (
@@ -145,6 +149,52 @@ def create_research_tools(
             + "\n".join(source_lines)
             + "\n\nPENDING OFFER VERIFICATIONS:\n"
             + pending_summary
+        )
+
+    @tool
+    def research_read_observation(
+        observation_id: str,
+        offer_ref: str | None = None,
+    ) -> str:
+        """
+        Read a previously stored browser observation.
+
+        This is archived evidence only. It does not make the observation
+        current again and does not replace fresh browser verification.
+        """
+
+        cleaned_id = observation_id.strip()
+
+        if not cleaned_id:
+            return "ARCHIVE READ BLOCKED: observation_id is required."
+
+        observation = observation_store.get(cleaned_id)
+
+        if observation is None:
+            return "ARCHIVE READ BLOCKED: Observation not found."
+
+        content = observation.page_text
+
+        if offer_ref:
+            try:
+                content = get_snapshot_subtree(
+                    observation.page_text,
+                    offer_ref,
+                )
+            except ValueError as error:
+                return (
+                    "ARCHIVE READ BLOCKED: "
+                    f"{error}"
+                )
+
+        return (
+            "ARCHIVED BROWSER OBSERVATION\n"
+            f"Observation ID: {observation.observation_id}\n"
+            f"Page URL: {observation.page_url}\n"
+            f"Captured at: {observation.captured_at.isoformat()}\n"
+            "Freshness/currentness is NOT established by this tool.\n"
+            "Use a fresh browser_snapshot for verification.\n\n"
+            f"{content}"
         )
 
     @tool
@@ -1112,6 +1162,7 @@ def create_research_tools(
 
     return [
     research_status,
+    research_read_observation,
     research_start_source,
     research_record_discovery_attempt,
     research_add_result,
