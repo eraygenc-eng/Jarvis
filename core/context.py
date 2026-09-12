@@ -8,3 +8,6 @@ class RequestContext:
 
     # Allow an explicit output language when available.
     response_language: str | None = None
+
+    # Mark whether this request is an active comparison research task.
+    research_active: bool = False

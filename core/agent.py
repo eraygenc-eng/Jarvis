@@ -1,9 +1,15 @@
 import uuid
 import json
+import time
 
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelFallbackMiddleware
+
+from langchain.agents.middleware import (
+    ModelFallbackMiddleware,
+    before_model,
+)
+
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage
 
@@ -84,6 +90,27 @@ class JarvisAgent:
         # Measure model and tool execution times
         self.timing_callback = TimingCallback()
 
+        @before_model(can_jump_to=["end"])
+        def research_completion_guard(state, runtime):
+            context = runtime.context
+
+            # Do not affect normal chat or non-research requests.
+            if context is None or not context.research_active:
+                return None
+
+            # Re-check whether the final page observation is still valid.
+            self._refresh_final_page_status()
+
+            research_state = self.current_comparison_state
+
+            if (
+                research_state is not None
+                and research_state.is_ready_to_return()
+            ):
+                return {"jump_to": "end"}
+
+            return None
+
         tools = [
             calculator,
             open_application,
@@ -104,6 +131,7 @@ class JarvisAgent:
             middleware=[
                 request_prompt,
                 security_middleware,
+                research_completion_guard,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 ),
@@ -553,107 +581,163 @@ No transaction action or approval request is part of this report.
         self,
         prompt: str,
     ) -> str:
-        # Detect the task requested by the user
-        task_type = classify_task(prompt)
-
-        # Continue unfinished comparison research
-        active_comparison = (
-            self.current_comparison_state is not None
-            and not self.current_comparison_state.is_ready_to_return()
-        )
-
-        if active_comparison:
-            task_type = TaskType.COMPARISON
-
-        # Create a new comparison state only for a new comparison
-        if (
-            task_type == TaskType.COMPARISON
-            and not active_comparison
-        ):
-            self.current_comparison_state = (
-                await create_comparison_state(
-                    prompt,
-                    self.llm,
-                )
-            )
+        # Reset performance statistics for this request
+        self.timing_callback.reset_request_stats()
 
         config = self._get_config()
 
-        # Keep the real user message throughout this request.
-        context = RequestContext(user_message=prompt)
+        planning_start = time.perf_counter()
 
-        # Send the original user request to the agent
-        result = await self.agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ]
-            },
-            config=config,
-            context=context,
-        )
-        self._refresh_final_page_status()
+        try:
+            # Detect the task requested by the user
+            task_type = classify_task(prompt)
 
-        # Continue comparison research when the model stops early
-        if task_type == TaskType.COMPARISON:
-            continuation_count = 0
-            stalled_continuations = 0
+            # Detect the task requested by the user
+            task_type = classify_task(prompt)
 
-            while (
+            # Continue unfinished comparison research
+            active_comparison = (
                 self.current_comparison_state is not None
                 and not self.current_comparison_state.is_ready_to_return()
-                and continuation_count
-                < self.max_research_continuations
-            ):
-                continuation_count += 1
-
-                continuation_prompt = (
-                    self._build_research_continuation_prompt()
-                )
-                progress_before = self._research_progress_signature()
-
-                result = await self.agent.ainvoke(
-                    {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": continuation_prompt,
-                            }
-                        ]
-                    },
-                    config=config,
-                    context=context,
-                )
-                self._refresh_final_page_status()
-                progress_after = self._research_progress_signature()
-
-                if progress_after == progress_before:
-                    stalled_continuations += 1
-                else:
-                    stalled_continuations = 0
-
-                if stalled_continuations >= self.max_stalled_research_continuations:
-                    break
-
-        if task_type == TaskType.COMPARISON and self.current_comparison_state is not None:
-            # This model call has no bound tools, so reporting cannot resume browsing.
-            return await self._generate_research_report(prompt, config)
-
-        # Get the final Jarvis response
-        content = result["messages"][-1].content
-
-        # Some models return text blocks
-        if isinstance(content, list):
-            return "".join(
-                block.get("text", "")
-                for block in content
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "text"
-                )
             )
 
-        return content
+            if active_comparison:
+                task_type = TaskType.COMPARISON
+
+            # Create a new comparison state only for a new comparison
+            if (
+                task_type == TaskType.COMPARISON
+                and not active_comparison
+            ):
+                self.current_comparison_state = (
+                    await create_comparison_state(
+                        prompt,
+                        self.llm,
+                        config=config,
+                    )
+                )
+
+            planning_duration = time.perf_counter() - planning_start
+
+            print(
+                f"[Timing] Planning: "
+                f"{planning_duration:.2f} seconds"
+            )
+
+
+            # Keep the real user message throughout this request.
+            context = RequestContext(
+                user_message=prompt,
+                research_active=(task_type == TaskType.COMPARISON),
+            )
+
+            research_start = time.perf_counter()
+
+            # Send the original user request to the agent
+            result = await self.agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ]
+                },
+                config=config,
+                context=context,
+            )
+            self._refresh_final_page_status()
+
+            continuation_count = 0
+
+            # Continue comparison research when the model stops early
+            if task_type == TaskType.COMPARISON:
+                stalled_continuations = 0
+
+                while (
+                    self.current_comparison_state is not None
+                    and not self.current_comparison_state.is_ready_to_return()
+                    and continuation_count
+                    < self.max_research_continuations
+                ):
+                    continuation_count += 1
+
+                    continuation_prompt = (
+                        self._build_research_continuation_prompt()
+                    )
+                    progress_before = self._research_progress_signature()
+
+                    result = await self.agent.ainvoke(
+                        {
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": continuation_prompt,
+                                }
+                            ]
+                        },
+                        config=config,
+                        context=context,
+                    )
+                    self._refresh_final_page_status()
+                    progress_after = self._research_progress_signature()
+
+                    if progress_after == progress_before:
+                        stalled_continuations += 1
+                    else:
+                        stalled_continuations = 0
+
+                    if stalled_continuations >= self.max_stalled_research_continuations:
+                        break
+
+            research_duration = time.perf_counter() - research_start
+
+            print(
+                f"[Timing] Research: "
+                f"{research_duration:.2f} seconds"
+            )
+
+            print(
+                f"[Timing] Research continuations: "
+                f"{continuation_count}"
+            )
+
+            if (
+                task_type == TaskType.COMPARISON
+                and self.current_comparison_state is not None
+            ):
+                # This model call has no bound tools, so reporting cannot resume browsing.
+                report_start = time.perf_counter()
+
+                report = await self._generate_research_report(
+                    prompt,
+                    config,
+                )
+
+                report_duration = time.perf_counter() - report_start
+
+                print(
+                    f"[Timing] Report: "
+                    f"{report_duration:.2f} seconds"
+                )
+
+                return report
+
+            # Get the final Jarvis response
+            content = result["messages"][-1].content
+
+            # Some models return text blocks
+            if isinstance(content, list):
+                return "".join(
+                    block.get("text", "")
+                    for block in content
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                    )
+                )
+
+            return content
+
+        finally:
+            self.timing_callback.print_summary()

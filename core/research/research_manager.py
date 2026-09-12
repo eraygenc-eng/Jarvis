@@ -30,6 +30,7 @@ def extract_response_text(content) -> str:
 async def extract_target_product_semantically(
     prompt: str,
     llm: BaseLLM,
+    config: dict | None = None,
 ) -> str:
     # Extract only the product identity from the user's request.
     extraction_prompt = f"""
@@ -67,7 +68,8 @@ Answer:
 """
 
     response = await llm.get_model().ainvoke(
-        extraction_prompt
+        extraction_prompt,
+        config=config,
     )
 
     target_product = extract_response_text(
@@ -85,6 +87,7 @@ Answer:
 async def detect_category_semantically(
     prompt: str, 
     llm: BaseLLM,
+    config: dict | None = None,
 ) -> ResearchCategory:
     # Ask the LLM to classify only the research category
     classification_prompt = f"""
@@ -104,7 +107,10 @@ Return only the category name.
 """
 
     # Use the existing primary Jarvis model
-    response = await llm.get_model().ainvoke(classification_prompt)
+    response = await llm.get_model().ainvoke(
+        classification_prompt,
+        config=config,
+    )
 
     # Extract and normalize the category returned by the model
     category_name = extract_response_text(
@@ -122,6 +128,7 @@ Return only the category name.
 async def detect_product_type_semantically(
     prompt: str,
     llm: BaseLLM,
+    config: dict | None = None,
 ) -> ProductType:
     # Ask the LLM to classify only the product type
     classification_prompt = f"""
@@ -141,7 +148,10 @@ Return only the category name.
 """
 
     # Use the existing primary Jarvis model
-    response = await llm.get_model().ainvoke(classification_prompt)
+    response = await llm.get_model().ainvoke(
+        classification_prompt,
+        config=config,
+    )
 
     # Extract and normalize the model response
     product_type_name = extract_response_text(
@@ -159,6 +169,7 @@ Return only the category name.
 async def create_comparison_state(
     prompt: str,
     llm: BaseLLM,
+    config: dict | None = None,
 ) -> ComparisonState:
     # Try the fast keyword-based category detection first
     category = detect_research_category(prompt)
@@ -168,6 +179,7 @@ async def create_comparison_state(
         category = await detect_category_semantically(
             prompt,
             llm,
+            config=config,
         )
 
     # Product comparisons may need a second level of classification
@@ -179,6 +191,7 @@ async def create_comparison_state(
         target_product = await extract_target_product_semantically(
             prompt,
             llm,
+            config=config,
         )
 
         # Try the fast keyword-based product type detection first
@@ -189,6 +202,7 @@ async def create_comparison_state(
             product_type = await detect_product_type_semantically(
                 prompt,
                 llm,
+                config=config,
             )
 
     # Plan sources using the resolved category and product type

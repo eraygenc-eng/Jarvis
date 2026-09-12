@@ -5,6 +5,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
+from pydantic import PrivateAttr
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
 from core.research.comparison_state import (
     ComparisonResult, ComparisonState, SourceStatus, VerificationStatus,
 )
@@ -26,6 +32,38 @@ SCOPES = {
     "hotel": "2026-11-10 to 2026-11-13, three nights, one double room, two adults",
     "car_rental": "2026-11-10 to 2026-11-13, compact, unlimited mileage, same pickup and return",
 }
+
+
+class CountingChatModel(BaseChatModel):
+    _call_count: int = PrivateAttr(default=0)
+
+    @property
+    def call_count(self):
+        return self._call_count
+
+    @property
+    def _llm_type(self):
+        return "counting-chat-model"
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        return self
+
+    def _generate(
+        self,
+        messages,
+        stop=None,
+        run_manager=None,
+        **kwargs,
+    ):
+        self._call_count += 1
+
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(content="model response")
+                )
+            ]
+        )
 
 
 def snapshot_and_quote(category="product", price=6000, **overrides):
@@ -414,6 +452,91 @@ class AgentReportTests(unittest.IsolatedAsyncioTestCase):
         context = agent._build_final_research_context()
         self.assertFalse(f.state.final_page_verified)
         self.assertIn("FINAL PAGE VERIFIED: False", context)
+
+
+class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ready_research_skips_model_but_report_and_normal_chat_still_use_it(self):
+        from core.agent import JarvisAgent
+        from core.context import RequestContext
+
+        f = ResearchFixture()
+
+        f.verify()
+        f.finalize()
+
+        response = f.tools[
+            "research_confirm_final_page"
+        ].invoke(f.capture())
+
+        self.assertIn("CONFIRMED", response)
+        self.assertTrue(f.state.is_ready_to_return())
+
+        model = CountingChatModel()
+
+        llm = SimpleNamespace(
+            get_model=lambda: model,
+            get_fallback_model=lambda: model,
+        )
+
+        agent = JarvisAgent(
+            llm,
+            observation_store=f.store,
+        )
+
+        agent.current_comparison_state = f.state
+
+        config = {
+            "configurable": {
+                "thread_id": "completion-guard-test",
+            }
+        }
+
+        # Ready research must end before another research model call.
+        await agent.agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Compare prices",
+                    }
+                ]
+            },
+            config=config,
+            context=RequestContext(
+                user_message="Compare prices",
+                research_active=True,
+            ),
+        )
+
+        self.assertEqual(model.call_count, 0)
+
+        # Final report must still use the model exactly once.
+        report = await agent._generate_research_report(
+            "Compare prices",
+            config,
+        )
+
+        self.assertEqual(report, "model response")
+        self.assertEqual(model.call_count, 1)
+
+        # A later normal chat request must not be blocked.
+        await agent.agent.ainvoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Merhaba",
+                    }
+                ]
+            },
+            config=config,
+            context=RequestContext(
+                user_message="Merhaba",
+                research_active=False,
+            ),
+        )
+
+        self.assertEqual(model.call_count, 2)
 
 
 if __name__ == "__main__":
