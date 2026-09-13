@@ -35,6 +35,10 @@ from core.research.evidence import ObservationStore
 
 from core.browser_context import create_browser_context_middleware
 
+from core.research.progress_middleware import (
+    create_research_progress_middleware,
+)
+
 
 from core.research.ranking import (
     find_best_public,
@@ -98,6 +102,12 @@ class JarvisAgent:
             )
         )
 
+        research_progress_middleware = (
+            create_research_progress_middleware(
+                lambda: self.current_comparison_state
+            )
+        )
+
         @before_model(can_jump_to=["end"])
         def research_completion_guard(state, runtime):
             context = runtime.context
@@ -141,6 +151,7 @@ class JarvisAgent:
                 security_middleware,
                 research_completion_guard,
                 browser_context_middleware,
+                research_progress_middleware,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 ),
@@ -152,19 +163,59 @@ class JarvisAgent:
         state = self.current_comparison_state
         if state is None:
             return "There is no active comparison research."
+
         if not state.coverage_complete():
-            remaining = [source for source in state.planned_sources
-                         if not state.get_source_state(source).is_terminal()]
+            researching = []
+            pending = []
+
+            for source in state.planned_sources:
+                source_state = state.get_source_state(source)
+
+                if (
+                    source_state is None
+                    or source_state.is_terminal()
+                ):
+                    continue
+
+                if source_state.status.value == "researching":
+                    researching.append(source)
+
+                elif source_state.status.value == "pending":
+                    pending.append(source)
+
+            if researching:
+                return (
+                    f"Continue the original {state.category} research. "
+                    f"Already researching: {researching}. "
+                    f"Still pending: {pending}. "
+                    "Continue the already-started source first. "
+                    "Do NOT call research_start_source again for a source "
+                    "whose status is already researching. "
+                    "Inspect real search results, record actual discovery "
+                    "attempts and store distinct matching offers. "
+                    "Keep all requested dates, quantities and other constraints. "
+                    "Open exact merchant/provider offers, set their offer URLs, "
+                    "capture browser_snapshot and verify using an evidence-backed quote. "
+                    "Complete the active source with its actual outcome before "
+                    "starting another pending source. "
+                    "Do not stop after the first cheap offer."
+                )
+
             return (
-                f"Continue the original {state.category} research. Remaining sources: {remaining}. "
-                "Call research_start_source, inspect real search results, record actual discovery "
-                "attempts and store distinct matching offers. Keep all requested dates, quantities "
-                "and other constraints. Open exact merchant/provider offers, set their offer URLs, "
+                f"Continue the original {state.category} research. "
+                f"Pending sources: {pending}. "
+                "Start the next pending source with research_start_source. "
+                "Research that source thoroughly before moving to another source. "
+                "Inspect real search results, record actual discovery attempts "
+                "and store distinct matching offers. "
+                "Keep all requested dates, quantities and other constraints. "
+                "Open exact merchant/provider offers, set their offer URLs, "
                 "capture browser_snapshot and verify using an evidence-backed quote. "
-                "Complete each source with its actual outcome. Record genuine verification "
-                "failures with research_block_verification; blocked offers need not be retried "
-                "to complete a source. Do not stop after the first cheap offer."
+                "Complete each source with its actual outcome. "
+                "Do not stop after the first cheap offer."
             )
+
+        
         pending = get_pending_verifications(state)
         if pending:
             return (
