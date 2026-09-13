@@ -56,17 +56,129 @@ class OfferQuote(BaseModel):
     notes: str | None = None
 
 
-def _excerpt(scope: str, value: str | None, label: str) -> str:
-    cleaned = " ".join((value or "").split())
-    if not cleaned or cleaned not in " ".join(scope.split()):
-        raise ValueError(f"{label} must be copied from the selected offer subtree.")
-    return cleaned
+def _clean_text(value: str | None) -> str:
+    return " ".join((value or "").split())
+
+
+def _find_scope_line(
+    scope: str,
+    fragment: str,
+) -> str | None:
+    fragment = _clean_text(fragment)
+
+    if not fragment:
+        return None
+
+    for raw_line in scope.splitlines():
+        line = _clean_text(raw_line)
+
+        if fragment.casefold() in line.casefold():
+            return line
+
+    return None
+
+
+def _excerpt(
+    scope: str,
+    value: str | None,
+    label: str,
+) -> str:
+    cleaned = _clean_text(value)
+
+    if not cleaned:
+        raise ValueError(
+            f"{label} is required."
+        )
+
+    normalized_scope = _clean_text(scope)
+
+    # Best case: exact copied evidence.
+    if cleaned.casefold() in normalized_scope.casefold():
+        return cleaned
+
+    candidates = []
+
+    # Try quoted text from a descriptive LLM sentence.
+    candidates.extend(
+        re.findall(
+            r'''["'“”‘’]([^"'“”‘’]{4,})["'“”‘’]''',
+            cleaned,
+        )
+    )
+
+    # Also support descriptions such as:
+    # "Product title: Logitech ..."
+    for part in re.split(r"[;\n]", cleaned):
+        if ":" not in part:
+            continue
+
+        candidate = part.split(":", 1)[1].strip(" .")
+
+        if len(candidate) >= 4:
+            candidates.append(candidate)
+
+    # Prefer the most specific fragment.
+    for candidate in sorted(
+        set(candidates),
+        key=len,
+        reverse=True,
+    ):
+        matched_line = _find_scope_line(
+            scope,
+            candidate,
+        )
+
+        if matched_line:
+            return matched_line
+
+    raise ValueError(
+        f"{label} could not be grounded "
+        "in the selected offer subtree."
+    )
 
 
 def _amount(excerpt, text, value, separator, label):
     error = validate_observed_amount(excerpt, text or "", value, separator)
     if error:
         raise ValueError(f"{label}: {error}")
+
+def _is_generic_seller(value: str | None) -> bool:
+    normalized = normalize_identity(value or "")
+
+    if not normalized:
+        return True
+
+    generic_markers = (
+        "marketplace",
+        "listedsellers",
+        "listedseller",
+        "unknown",
+        "sellerunknown",
+    )
+
+    return any(
+        marker in normalized
+        for marker in generic_markers
+    )
+
+
+def _currency_token_present(
+    text: str,
+    token: str,
+) -> bool:
+    if token.isalnum():
+        return (
+            re.search(
+                r"(?<!\w)"
+                + re.escape(token)
+                + r"(?!\w)",
+                text,
+                re.I,
+            )
+            is not None
+        )
+
+    return token in text
 
 
 def validate_quote(state: ComparisonState, result: ComparisonResult,
@@ -82,23 +194,79 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
 
     scope = get_snapshot_subtree(observation.page_text, quote.offer_ref)
     identity = _excerpt(scope, quote.identity_evidence, "Identity evidence")
-    seller_evidence = _excerpt(scope, quote.seller_evidence, "Seller/provider evidence")
+
+    seller_evidence = _excerpt(
+        scope,
+        quote.seller_evidence,
+        "Seller/provider evidence",
+    )
+
     seller = quote.seller.strip()
-    if not seller or normalize_identity(seller) not in normalize_identity(seller_evidence):
-        raise ValueError("Seller/provider does not match its evidence.")
-    if result.seller and normalize_identity(result.seller) != normalize_identity(seller):
-        raise ValueError("The seller/provider changed. Store it as a separate offer.")
+
+    if not seller:
+        raise ValueError(
+            "Seller/provider is required."
+        )
+
+    if (
+        normalize_identity(seller)
+        not in normalize_identity(scope)
+    ):
+        raise ValueError(
+            "Seller/provider could not be found "
+            "in the selected offer subtree."
+        )
+
+    if (
+        result.seller
+        and not _is_generic_seller(result.seller)
+        and normalize_identity(result.seller)
+        != normalize_identity(seller)
+    ):
+        raise ValueError(
+            "seller/provider changed. "
+            "Store it as a separate offer."
+        )
+
     if state.target_product:
         conflict = get_product_identity_conflict(state.target_product, identity)
         if conflict:
             raise ValueError(f"Product identity mismatch: {conflict}")
+
     for field in ("sku", "variant"):
         observed = getattr(quote, field)
         expected = getattr(result, field)
-        if observed and normalize_identity(observed) not in normalize_identity(identity):
-            raise ValueError(f"{field} is not supported by the identity evidence.")
-        if expected and (not observed or normalize_identity(expected) != normalize_identity(observed)):
-            raise ValueError(f"The stored {field} must match fresh identity evidence.")
+
+        if (
+            observed
+            and normalize_identity(observed)
+            not in normalize_identity(scope)
+        ):
+            raise ValueError(
+                f"{field} is not supported "
+                "by the identity evidence."
+            )
+
+        if (
+            expected
+            and normalize_identity(expected)
+            not in normalize_identity(scope)
+        ):
+            raise ValueError(
+                f"The stored {field} is not supported "
+                "by fresh identity evidence."
+            )
+
+        if (
+            observed
+            and expected
+            and normalize_identity(observed)
+            != normalize_identity(expected)
+        ):
+            raise ValueError(
+                f"The observed {field} does not match "
+                f"the stored {field}."
+            )
 
     evidence = _excerpt(scope, quote.price_evidence, "Price evidence")
     if quote.price is None and quote.regular_price is None:
@@ -112,7 +280,7 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
         _amount(evidence, quote.price_amount_texts.get(field), value,
                 quote.price_decimal_separator, field)
     # A linked price for another seller/variant is not the current page's quote.
-    for ref in re.findall(r"\[ref=([^\]]+)\]", quote.price_evidence):
+    for ref in re.findall(r"\[ref=([^\]]+)\]", evidence):
         node = get_snapshot_subtree(scope, ref)
         for target in re.findall(r"(?m)^\s+- /url: (.+)$", node):
             target = target.strip().strip("\"'")
@@ -124,12 +292,23 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
         raise ValueError("An explicit three-letter currency code is required.")
     currency_text = _excerpt(scope, quote.currency_evidence or quote.price_evidence, "Currency evidence")
     aliases = {"TRY": ("TRY", "TL", "₺"), "EUR": ("EUR", "€"), "GBP": ("GBP", "£")}
-    if not any(re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", currency_text, re.I)
-               for token in aliases.get(currency, (currency,))):
+    if not any(
+        _currency_token_present(
+            currency_text,
+            token,
+        )
+        for token in aliases.get(
+            currency,
+            (currency,),
+        )
+    ):
         raise ValueError("Currency is not explicit in its evidence; ambiguous symbols alone are insufficient.")
     if normalize_price_condition(quote.price_condition):
         _excerpt(scope, quote.condition_evidence, "Price condition evidence")
-    if quote.price_scope == "total":
+    if (
+        quote.price_scope == "total"
+        and state.category not in {"product", "general"}
+    ):
         _excerpt(scope, quote.scope_evidence, "Full request scope evidence")
     if quote.fees_included:
         _excerpt(scope, quote.fees_evidence, "All mandatory costs included evidence")
@@ -143,13 +322,36 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
         if state.category not in {"product", "general"}:
             raise ValueError("Use mandatory_fees or an inclusive total for travel, not shipping_cost.")
         shipping = _excerpt(scope, quote.shipping_evidence, "Shipping evidence")
+
+        free_shipping_labels = {
+            "kargo bedava",
+            "ücretsiz kargo",
+            "bedava kargo",
+            "free shipping",
+            "free delivery",
+        }
+
+        normalized_shipping = shipping.casefold()
+
         if quote.shipping_amount_text:
-            _amount(shipping, quote.shipping_amount_text, quote.shipping_cost,
-                    quote.price_decimal_separator, "shipping_cost")
-        elif quote.shipping_cost != 0 or shipping.casefold().strip(" .!") not in {
-            "kargo bedava", "ücretsiz kargo", "bedava kargo", "free shipping", "free delivery",
-        }:
-            raise ValueError("Shipping requires a numeric amount or an explicit free-shipping label.")
+            _amount(
+                shipping,
+                quote.shipping_amount_text,
+                quote.shipping_cost,
+                quote.price_decimal_separator,
+                "shipping_cost",
+            )
+        elif (
+            quote.shipping_cost != 0
+            or not any(
+                label in normalized_shipping
+                for label in free_shipping_labels
+            )
+        ):
+            raise ValueError(
+                "Shipping requires a numeric amount "
+                "or an explicit free-shipping label."
+            )
     return scope
 
 

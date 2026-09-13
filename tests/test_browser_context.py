@@ -6,6 +6,7 @@ from core.browser_context import (
     compact_old_browser_snapshots,
     create_browser_context_middleware,
     get_recent_tool_group_indices,
+    prune_old_completed_tool_groups,
 )
 
 from core.research.evidence import ObservationStore
@@ -434,6 +435,83 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             ).page_text,
             page_1,
         )
+
+
+    def test_old_completed_tool_groups_are_pruned_only_after_threshold(self):
+        store = ObservationStore()
+
+        messages = []
+
+        for number in range(1, 10):
+            page = f"SNAPSHOT {number} " * 400
+
+            observation = store.capture(
+                f"https://example.com/{number}",
+                page,
+            )
+
+            call_id = f"call-{number}"
+
+            messages.extend([
+                self._assistant_call(call_id),
+                self._snapshot_message(
+                    observation,
+                    call_id,
+                    page,
+                ),
+            ])
+
+        original_length = len(messages)
+
+        pruned = prune_old_completed_tool_groups(
+            messages,
+            store,
+        )
+
+        # Raw history is untouched.
+        self.assertEqual(
+            len(messages),
+            original_length,
+        )
+
+        # With 9 completed groups and keep_count=4, only the newest
+        # four groups remain model-facing.
+        self.assertEqual(
+            len(pruned),
+            8,
+        )
+
+        remaining_ids = {
+            message.tool_call_id
+            for message in pruned
+            if isinstance(message, ToolMessage)
+        }
+
+        self.assertEqual(
+            remaining_ids,
+            {
+                "call-6",
+                "call-7",
+                "call-8",
+                "call-9",
+            },
+        )
+
+        # The current observation is the newest snapshot and remains intact.
+        current_snapshot = next(
+            message
+            for message in pruned
+            if (
+                isinstance(message, ToolMessage)
+                and message.tool_call_id == "call-9"
+            )
+        )
+
+        self.assertNotIn(
+            "ARCHIVED BROWSER SNAPSHOT",
+            current_snapshot.content,
+        )
+
 
     def test_incomplete_multi_tool_group_is_protected(self):
         messages = [

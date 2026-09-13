@@ -601,9 +601,6 @@ No transaction action or approval request is part of this report.
             # Detect the task requested by the user
             task_type = classify_task(prompt)
 
-            # Detect the task requested by the user
-            task_type = classify_task(prompt)
-
             # Continue unfinished comparison research
             active_comparison = (
                 self.current_comparison_state is not None
