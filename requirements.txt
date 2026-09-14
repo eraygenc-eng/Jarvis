@@ -6,3 +6,5 @@ langchain-mcp-adapters==0.3.2
 langgraph==1.2.11
 pydantic==2.13.5
 python-dotenv==1.2.3
+pyautogui==0.9.54
+pyperclip==1.11.0

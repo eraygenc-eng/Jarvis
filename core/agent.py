@@ -52,6 +52,19 @@ from core.research.ranking import (
     no_winner_reason,
 )
 
+from core.tools.desktop_tools import (
+    desktop_get_screen_size,
+    desktop_get_mouse_position,
+    desktop_move_mouse,
+    desktop_click_mouse,
+    desktop_double_click,
+    desktop_right_click,
+    desktop_scroll,
+    desktop_type_text,
+    desktop_press_key,
+    desktop_hotkey
+)
+
 from core.tools.calculator import calculator
 from core.tools.open_application import open_application
 from core.tools.close_application import close_application
@@ -136,6 +149,16 @@ class JarvisAgent:
             close_application,
             launch_game,
             web_search_tool,
+            desktop_get_screen_size,
+            desktop_get_mouse_position,
+            desktop_move_mouse,
+            desktop_click_mouse,
+            desktop_double_click,
+            desktop_right_click,
+            desktop_scroll,
+            desktop_type_text,
+            desktop_press_key,
+            desktop_hotkey,
         ]
 
         tools.extend(research_tools)

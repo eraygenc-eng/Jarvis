@@ -47,6 +47,11 @@ TOOL_PERMISSIONS = {
     "browser_snapshot": ToolPermission.ALLOW,
     "browser_hover": ToolPermission.ALLOW,
     "browser_wait_for": ToolPermission.ALLOW,
+
+    "desktop_get_screen_size": ToolPermission.ALLOW,
+    "desktop_get_mouse_position": ToolPermission.ALLOW,
+    "desktop_move_mouse": ToolPermission.ALLOW,
+    "desktop_scroll": ToolPermission.ALLOW,
     
 
     # Safe research verification tools
@@ -76,6 +81,14 @@ TOOL_PERMISSIONS = {
     "browser_tabs": ToolPermission.CONDITIONAL,
     "browser_handle_dialog": ToolPermission.CONDITIONAL,
     "browser_evaluate": ToolPermission.CONDITIONAL,
+
+
+    "desktop_click_mouse": ToolPermission.CONDITIONAL,
+    "desktop_double_click": ToolPermission.CONDITIONAL,
+    "desktop_right_click": ToolPermission.CONDITIONAL,
+    "desktop_type_text": ToolPermission.CONDITIONAL,
+    "desktop_press_key": ToolPermission.CONDITIONAL,
+    "desktop_hotkey": ToolPermission.CONDITIONAL,
 
     # Tools that always need user confirmation
     "open_application": ToolPermission.CONFIRM,
@@ -195,6 +208,48 @@ def contains_sensitive_action(
             return keyword
 
     return None
+
+
+def check_desktop_action_safety(
+    arguments: Any,
+) -> SecurityDecision:
+    """Check whether a desktop action has a sensitive purpose."""
+
+    if not isinstance(arguments, dict):
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Desktop action arguments could not be inspected safely.",
+        )
+
+    purpose = str(
+        arguments.get("purpose", "")
+    ).strip()
+
+    if not purpose:
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason="Desktop action purpose is missing.",
+        )
+
+    sensitive_keyword = contains_sensitive_action(
+        purpose
+    )
+
+    if sensitive_keyword is not None:
+        return SecurityDecision(
+            action=SecurityAction.CONFIRM,
+            reason=(
+                "This desktop action may create a sensitive "
+                "or irreversible effect: "
+                f"{sensitive_keyword}"
+            ),
+        )
+
+    return SecurityDecision(
+        action=SecurityAction.ALLOW,
+        reason="Desktop action purpose is not sensitive.",
+    )
+
 
 
 def check_browser_evaluate_safety(
@@ -375,6 +430,19 @@ def evaluate_tool_call(
             action=SecurityAction.ALLOW,
             reason="Tool is allowed by the security policy.",
         )
+
+
+    # Check desktop actions separately
+    if tool_name in {
+        "desktop_click_mouse",
+        "desktop_double_click",
+        "desktop_right_click",
+        "desktop_type_text",
+        "desktop_press_key",
+        "desktop_hotkey",
+    }:
+        return check_desktop_action_safety(arguments)
+
 
     # Check URL safety for conditional tools
     if isinstance(arguments, dict):
