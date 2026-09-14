@@ -11,6 +11,7 @@ from core.research.evidence import BrowserObservation, get_snapshot_subtree
 from core.research.ranking import get_public_total, get_conditional_total, normalize_currency
 from core.research.research_utils import get_product_identity_conflict, normalize_identity, normalize_price_condition, url_belongs_to_source
 from core.research.verification import is_domain_url, urls_match, validate_observed_amount
+from core.research.quote_evidence import validate_relationships, visible_text
 
 
 class OfferQuote(BaseModel):
@@ -162,6 +163,24 @@ def _is_generic_seller(value: str | None) -> bool:
     )
 
 
+def _is_unverified_platform_label(result: ComparisonResult, page_url: str) -> bool:
+    """A discovery site's store label may name the host, not its merchant.
+
+    Allow first verification to resolve that label using fully validated seller
+    evidence. An actual merchant name and any previously verified seller stay fixed.
+    """
+    from urllib.parse import urlsplit
+    import unicodedata
+    if any(entry.get("stage") == "verified" for entry in result.price_history):
+        return False
+    def domain_label(value):
+        return normalize_identity("".join(char for char in unicodedata.normalize("NFKD", value)
+                                           if not unicodedata.combining(char))).replace("ı", "i")
+    seller = domain_label(result.seller or "")
+    host_labels = (urlsplit(page_url).hostname or "").split(".")
+    return len(seller) >= 4 and any(seller == domain_label(label) for label in host_labels)
+
+
 def _currency_token_present(
     text: str,
     token: str,
@@ -210,7 +229,7 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
 
     if (
         normalize_identity(seller)
-        not in normalize_identity(scope)
+        not in normalize_identity(seller_evidence)
     ):
         raise ValueError(
             "Seller/provider could not be found "
@@ -220,6 +239,7 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
     if (
         result.seller
         and not _is_generic_seller(result.seller)
+        and not (state.category == "product" and _is_unverified_platform_label(result, observation.page_url))
         and normalize_identity(result.seller)
         != normalize_identity(seller)
     ):
@@ -269,6 +289,7 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
             )
 
     evidence = _excerpt(scope, quote.price_evidence, "Price evidence")
+    validate_relationships(scope, identity, seller_evidence, evidence)
     if quote.price is None and quote.regular_price is None:
         raise ValueError("Provide a freshly observed price or regular_price.")
     if not re.search(r"\[ref=[^\]]+\]", evidence):
@@ -305,13 +326,19 @@ def validate_quote(state: ComparisonState, result: ComparisonResult,
         raise ValueError("Currency is not explicit in its evidence; ambiguous symbols alone are insufficient.")
     if normalize_price_condition(quote.price_condition):
         _excerpt(scope, quote.condition_evidence, "Price condition evidence")
-    if (
-        quote.price_scope == "total"
-        and state.category not in {"product", "general"}
-    ):
-        _excerpt(scope, quote.scope_evidence, "Full request scope evidence")
+    if quote.price_scope == "total":
+        scope_evidence = _excerpt(scope, quote.scope_evidence, "Full request scope evidence")
+        if state.category == "product":
+            requested = state.criteria.get("quantity", 1)
+            quantity_text = visible_text(scope_evidence).casefold()
+            quantity_match = re.search(r'(?:adet|quantity|tane)[^\d]{0,30}(\d+)', quantity_text)
+            quantity = int(quantity_match[1]) if quantity_match else 1 if re.search(r'\b(?:one item|1 item|bir adet)\b', quantity_text) else None
+            if quantity != requested or requested != 1:
+                raise ValueError("Product total requires evidence for one requested item. Multi-item prices remain provisional until an order total is supported.")
     if quote.fees_included:
-        _excerpt(scope, quote.fees_evidence, "All mandatory costs included evidence")
+        fees_evidence = _excerpt(scope, quote.fees_evidence, "All mandatory costs included evidence")
+        if not re.search(r'all mandatory (?:fees|costs) included|all taxes and fees included|tüm (?:zorunlu ücretler|vergiler ve ücretler) dahil', visible_text(fees_evidence), re.I):
+            raise ValueError("Inclusive fees require an explicit all-mandatory-costs-included statement.")
         if quote.shipping_cost is not None or quote.mandatory_fees is not None:
             raise ValueError("An inclusive total cannot also add shipping or mandatory fees.")
     elif quote.mandatory_fees is not None:
@@ -368,6 +395,9 @@ def quote_prices(result: ComparisonResult) -> dict:
 def apply_quote(result: ComparisonResult, observation: BrowserObservation, quote: OfferQuote) -> None:
     if not result.price_history:
         result.price_history.append({"stage": "discovery", "url": result.url, **quote_prices(result)})
+    if result.seller and normalize_identity(result.seller) != normalize_identity(quote.seller):
+        result.details["discovery_seller_label"] = result.seller
+        result.details["seller_resolution_observation_id"] = observation.observation_id
     for field in ("price", "regular_price", "shipping_cost", "mandatory_fees",
                   "fees_included", "price_scope", "scope_evidence", "variant", "sku"):
         setattr(result, field, getattr(quote, field))
@@ -381,6 +411,7 @@ def apply_quote(result: ComparisonResult, observation: BrowserObservation, quote
     result.verified = True
     result.verification_status = VerificationStatus.VERIFIED
     result.verification_reason = None
+    result.reset_verification_retry()
     result.verification_url = observation.page_url
     result.verification_observation_id = observation.observation_id
     result.verification_price_evidence = quote.price_evidence

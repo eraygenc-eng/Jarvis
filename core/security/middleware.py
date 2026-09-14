@@ -48,6 +48,12 @@ async def security_middleware(request, handler):
 
     # Ask the user before running sensitive actions
     if decision.action == SecurityAction.CONFIRM:
+        context = getattr(request.runtime, "context", None)
+        if context is not None and not getattr(context, "interactive", True):
+            return ToolMessage(
+                content=f"Confirmation required; action was not executed: {decision.reason}",
+                tool_call_id=request.tool_call["id"],
+            )
         approved = await ask_user_confirmation(
             tool_name=tool_name,
             arguments=arguments,

@@ -1,0 +1,69 @@
+    - generic [ref=f12e70]:
+      - generic [ref=f12e71]:
+        - generic [ref=f12e78]:
+          - list [ref=f12e79]:
+            - listitem [ref=f12e80]:
+              - img "Logitech G Pro X Superlight 2 Hafif Hero 2 Sensör 32.000 Dpi Lightspeed Kablosuz Oyuncu Mouse - Siyah" [ref=f12e82]
+          - link "Yakınlaştır":
+            - /url: javascript:;
+        - generic [ref=f12e83]:
+          - heading [level=1] [ref=f12e84]:
+            - link "Logitech" [ref=f12e85] [cursor=pointer]:
+              - /url: /logitech/b/b-2922
+            - text: G Pro X Superlight 2 Hafif Hero 2 Sensör 32.000 Dpi Lightspeed Kablosuz Oyuncu Mouse - Siyah
+          - generic [ref=f12e86]: "Ürün Kodu: 5000673826"
+          - link "1.009,52 TL x 9 Aya Varan Taksit Seçenekleri" [ref=f12e89] [cursor=pointer]:
+            - /url: javascript:;
+          - link "Yapı Kredi World'e Özel 550 TL'ye Varan Worldpuan" [ref=f12e90] [cursor=pointer]:
+            - /url: https://www.koctas.com.tr/koctas-yapikredi-kampanyasi
+          - generic [ref=f12e93]:
+            - generic [ref=f12e94]:
+              - text: "Satıcı:"
+              - link "GamingGenTR" [ref=f12e96] [cursor=pointer]:
+                - /url: /gaminggentr/s/10325
+              - generic [ref=f12e97]: "9.2"
+            - generic [ref=f12e98] [cursor=pointer]: Soru & Cevap (0)
+          - generic [ref=f12e101]:
+            - generic [ref=f12e102]:
+              - tablist [ref=f12e103]:
+                - 'tab "Standart Teslimat ● Ücretsiz Kargo Tahmini Kargoya Veriliş Tarihi: 15 Eylül Adresini seç ne zaman teslim edileceğini öğren! Konum Seçiniz" [ref=f12e104] [cursor=pointer]':
+                  - generic [ref=f12e109]:
+                    - generic [ref=f12e110]: Standart Teslimat ● Ücretsiz Kargo
+                    - generic [ref=f12e111]: "Tahmini Kargoya Veriliş Tarihi: 15 Eylül"
+                  - generic [ref=f12e112]:
+                    - generic [ref=f12e113]: Adresini seç ne zaman teslim edileceğini öğren!
+                    - generic [ref=f12e114]: Konum Seçiniz
+                - tab "Mağazadan Ücretsiz Teslim Bu teslimat seçeneği uygun değil":
+                  - generic:
+                    - generic: Mağazadan Ücretsiz Teslim
+                    - generic: Bu teslimat seçeneği uygun değil
+              - paragraph [ref=f12e120]:
+                - link "Mağaza Değiştir" [ref=f12e121] [cursor=pointer]:
+                  - /url: "#pick-store2"
+            - generic [ref=f12e125]:
+              - generic [ref=f12e127]:
+                - generic [ref=f12e128]: Adet
+                - generic [ref=f12e131]:
+                  - button "Azalt" [disabled] [ref=f12e133]
+                  - textbox "Adet" [ref=f12e136]: "1"
+                  - button "Arttır" [ref=f12e138] [cursor=pointer]
+              - generic [ref=f12e142]:
+                - generic [ref=f12e143]: 6.989 TL
+                - button "Sepete Ekle" [ref=f12e149] [cursor=pointer]
+            - generic [ref=f12e152]:
+              - link "Favorilerime Ekle" [ref=f12e154] [cursor=pointer]:
+                - /url: javascript:;
+              - link "Ürünü Paylaş" [ref=f12e159] [cursor=pointer]:
+                - /url: javascript:;
+          - generic [ref=f12e164]:
+            - generic [ref=f12e165]: Diğer Satıcılar
+            - generic [ref=f12e168] [cursor=pointer]:
+              - generic [ref=f12e169]:
+                - generic [ref=f12e170]:
+                  - generic [ref=f12e171]: "3.2"
+                  - link "Jetklik" [ref=f12e173]:
+                    - /url: /jetklik/s/4341
+                - paragraph [ref=f12e174]: En geç 21 Eylül Pazartesi günü kargoda
+              - generic [ref=f12e175]:
+                - generic [ref=f12e176]: 8.703,28 TL
+                - button "Sepete Ekle" [ref=f12e178]

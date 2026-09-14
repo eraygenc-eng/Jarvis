@@ -1,3 +1,5 @@
+import re
+
 from core.llm.base import BaseLLM
 from core.research.comparison_state import ComparisonState
 
@@ -40,6 +42,7 @@ Rules:
 - Return only the product name or model.
 - Keep brand, model number, generation, and edition when explicitly mentioned.
 - Remove shopping intent such as cheapest, compare, find, search, buy, or look for.
+- Remove requested item counts; quantity is tracked separately.
 - Do not add product information that the user did not provide.
 - Do not guess a more complete official product name.
 - Do not include explanations.
@@ -221,6 +224,13 @@ async def create_comparison_state(
         query=prompt,
         category=category.value,
         target_product=target_product,
+        criteria=product_criteria(prompt) if category == ResearchCategory.PRODUCT else {},
         planned_sources=sources,
         requires_staging=requires_staging,
     )
+
+
+def product_criteria(prompt: str) -> dict:
+    """Keep explicit item counts out of product identity and price ranking."""
+    match = re.search(r"\b(\d+)\s*(?:adet|tane|items?|units?|pieces?)\b", prompt, re.I)
+    return {"quantity": int(match[1]) if match else 1}

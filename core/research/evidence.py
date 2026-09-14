@@ -11,6 +11,7 @@ class BrowserObservation:
     page_url: str
     page_text: str
     captured_at: datetime
+    kind: str = "page"
 
 
 class ObservationStore:
@@ -22,6 +23,7 @@ class ObservationStore:
         self,
         page_url: str,
         page_text: str,
+        kind: str = "page",
     ) -> BrowserObservation:
         # Call only with data returned by the browser.
         if not page_url.strip() or not page_text.strip():
@@ -32,10 +34,18 @@ class ObservationStore:
             page_url=page_url,
             page_text=page_text,
             captured_at=datetime.now(timezone.utc),
+            kind=kind,
         )
 
         self._observations[observation.observation_id] = observation
         self.current_observation_id = observation.observation_id
+        return observation
+
+    def require_evidence(self, observation_id: str) -> BrowserObservation:
+        """Read a real recorded page/error without pretending it is current."""
+        observation = self.get(observation_id.strip())
+        if observation is None:
+            raise ValueError("A stored browser Observation ID is required as evidence.")
         return observation
 
     def invalidate_current(self) -> None:
@@ -46,6 +56,8 @@ class ObservationStore:
         observation = self.get(observation_id.strip())
         if observation is None:
             raise ValueError("Browser observation not found. Call browser_snapshot first.")
+        if observation.kind != "page":
+            raise ValueError("A browser error cannot verify an offer. Take a successful browser_snapshot.")
         if observation.observation_id != self.current_observation_id:
             raise ValueError("The observation is no longer current. Call browser_snapshot again.")
         age = (datetime.now(timezone.utc) - observation.captured_at).total_seconds()

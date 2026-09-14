@@ -7,12 +7,13 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 
 
 from langchain_core.tools import tool
+from mcp.types import TextContent
 
 from core.research.evidence import ObservationStore
 
 
 class BrowserManager:
-    def __init__(self):
+    def __init__(self, *, headless: bool = False):
         self.client = MultiServerMCPClient(
             {
                 "playwright": {
@@ -21,8 +22,9 @@ class BrowserManager:
                         "/c",
                         "npx",
                         "-y",
-                        "@playwright/mcp@latest",
+                        "@playwright/mcp@0.0.80",
                         "--isolated",
+                        *(["--headless"] if headless else []),
                     ],
                     "transport": "stdio",
                 }
@@ -46,7 +48,19 @@ class BrowserManager:
         # One shared browser must not navigate and capture different pages at once.
         async with self._action_lock:
             self.observations.invalidate_current()
-            return await handler(request)
+            response = await handler(request)
+            # Keep actual navigation failures, so a model cannot invent blockers.
+            arguments = getattr(request, "args", {})
+            url = arguments.get("url", "")
+            if getattr(response, "isError", False) and url.startswith(("http://", "https://")):
+                text = "\n".join(block.text for block in response.content if block.type == "text")
+                if text.strip():
+                    observation = self.observations.capture(url, text, kind="error")
+                    response = response.model_copy(update={"content": [
+                        *response.content,
+                        TextContent(type="text", text=f"Browser error Observation ID: {observation.observation_id}"),
+                    ]})
+            return response
 
 
     async def capture_snapshot(self) -> str:

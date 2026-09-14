@@ -300,6 +300,10 @@ class RankingAndCompletionTests(unittest.TestCase):
         f.state.add_result(priced_result(6000))
         self.assertEqual(get_unverified_source_winners(f.state, "Discovery"), [])
         f.state.start_source("Discovery")
+        observation = f.store.capture("https://discovery.example/search", "Desk lamp L2 offers")
+        f.tools["research_record_discovery_attempt"].invoke({
+            "source": "Discovery", "query": "Desk lamp L2", "observation_id": observation.observation_id,
+        })
         self.assertIn("FINISHED", f.tools["research_complete_source"].invoke({
             "source": "Discovery", "outcome": "completed", "coverage_summary": "One offer verified, other blocked.",
         }))
@@ -493,7 +497,9 @@ class AgentReportTests(unittest.IsolatedAsyncioTestCase):
         agent.llm = SimpleNamespace(get_model=lambda: report_model, get_fallback_model=lambda: report_model)
         agent.agent = SimpleNamespace(ainvoke=AsyncMock(), aupdate_state=AsyncMock())
         answer = await agent._generate_research_report("Compare hotel prices", {})
-        self.assertEqual(answer, "Comparison report")
+        self.assertTrue(answer.startswith("Comparison report"))
+        self.assertIn("https://merchant.example/offer", answer)
+        self.assertIn("Blocked source", answer)
         agent.agent.ainvoke.assert_not_called()
         agent.agent.aupdate_state.assert_awaited_once()
         messages = report_model.ainvoke.call_args.args[0]
@@ -578,7 +584,8 @@ class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
             config,
         )
 
-        self.assertEqual(report, "model response")
+        self.assertTrue(report.startswith("model response"))
+        self.assertIn("https://merchant.example/offer", report)
         self.assertEqual(model.call_count, 1)
 
         # A later normal chat request must not be blocked.

@@ -1,8 +1,19 @@
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 from typing import Any
 
 from core.research.research_utils import normalize_identity
+
+
+# Generic verification loop guard shared by every research category.
+MAX_VERIFICATION_ATTEMPTS = 4
+MAX_SAME_VERIFICATION_FAILURES = 2
+
+# Final-page confirmation has a separate retry lifecycle.
+# A bad final evidence selection must never destroy a previously verified offer.
+MAX_FINAL_PAGE_ATTEMPTS = 4
+MAX_SAME_FINAL_PAGE_FAILURES = 2
 
 
 class SourceStatus(str, Enum):
@@ -61,6 +72,7 @@ class SourceResearchState:
 
     # Optional notes about each discovery attempt
     discovery_notes: list[str] = field(default_factory=list)
+    discovery_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     # Why research ended
     completion_reason: str | None = None
@@ -124,6 +136,12 @@ class ComparisonResult:
 
     # Track verification separately from source research.
     verification_status: VerificationStatus = VerificationStatus.PENDING
+
+    # Bounded verification lifecycle. These fields are category-independent and
+    # apply to products, flights, hotels, rentals and other offer types.
+    verification_attempts: int = 0
+    verification_failure_counts: dict[str, int] = field(default_factory=dict)
+    last_verification_failure: str | None = None
 
     # Explain why verification was blocked or the offer was rejected.
     verification_reason: str | None = None
@@ -194,6 +212,62 @@ class ComparisonResult:
         self.verification_seller_evidence = None
         self.verification_notes = None
         self.verified_details = {}
+
+    def reset_verification_retry(self) -> None:
+        """Start a fresh retry epoch after a successful quote or URL correction."""
+        self.verification_attempts = 0
+        self.verification_failure_counts.clear()
+        self.last_verification_failure = None
+
+    def verification_is_terminal(self) -> bool:
+        return self.verification_status in {
+            VerificationStatus.BLOCKED,
+            VerificationStatus.REJECTED,
+        }
+
+    @staticmethod
+    def _verification_failure_key(reason: str) -> str:
+        # Snapshot refs and observation IDs change between fresh captures. They
+        # must not make the same logical failure look new to the retry guard.
+        key = " ".join(reason.split()).strip().casefold()
+        key = re.sub(r"\bf\d+e\d+\b", "<ref>", key)
+        key = re.sub(
+            r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+            "<observation>",
+            key,
+        )
+        return key or "unknown verification failure"
+
+    def record_verification_failure(self, reason: str) -> bool:
+        """Record one failed evidence check and return True when terminal.
+
+        A repeated evidence/quote failure may be corrected once, but it cannot
+        keep one candidate PENDING forever. The same lifecycle is used by every
+        research category.
+        """
+        cleaned_reason = " ".join(reason.split()).strip()
+        failure_key = self._verification_failure_key(cleaned_reason)
+
+        self.verification_attempts += 1
+        self.last_verification_failure = cleaned_reason
+        self.verification_reason = cleaned_reason
+        self.verified = False
+
+        same_failure_count = self.verification_failure_counts.get(failure_key, 0) + 1
+        self.verification_failure_counts[failure_key] = same_failure_count
+
+        terminal = (
+            self.verification_attempts >= MAX_VERIFICATION_ATTEMPTS
+            or same_failure_count >= MAX_SAME_VERIFICATION_FAILURES
+        )
+
+        self.verification_status = (
+            VerificationStatus.BLOCKED
+            if terminal
+            else VerificationStatus.PENDING
+        )
+
+        return terminal
 
 
     def matches_identity(
@@ -270,6 +344,13 @@ class ComparisonState:
     final_page_url: str | None = None
     final_page_notes: str | None = None
     final_page_observation_id: str | None = None
+
+    # Final-page confirmation is isolated from candidate verification.
+    final_page_attempts: int = 0
+    final_page_failure_counts: dict[str, int] = field(default_factory=dict)
+    final_page_last_failure: str | None = None
+    final_page_blocked: bool = False
+    final_page_block_reason: str | None = None
 
     # Whether Jarvis should move toward checkout/booking after finalization
     requires_staging: bool = False
@@ -506,6 +587,38 @@ class ComparisonState:
         self.staging_notes = reason
     
 
+    def reset_final_page_retry(self) -> None:
+        """Start a fresh final-confirmation retry epoch."""
+        self.final_page_attempts = 0
+        self.final_page_failure_counts.clear()
+        self.final_page_last_failure = None
+        self.final_page_blocked = False
+        self.final_page_block_reason = None
+
+    def record_final_page_failure(self, reason: str) -> bool:
+        """Record final-page evidence failure without touching the winner."""
+        cleaned_reason = " ".join(reason.split()).strip()
+        failure_key = ComparisonResult._verification_failure_key(cleaned_reason)
+
+        self.final_page_attempts += 1
+        self.final_page_last_failure = cleaned_reason
+        self.final_page_verified = False
+        self.final_page_url = None
+        self.final_page_observation_id = None
+        self.final_page_notes = None
+
+        same_failure_count = self.final_page_failure_counts.get(failure_key, 0) + 1
+        self.final_page_failure_counts[failure_key] = same_failure_count
+
+        terminal = (
+            self.final_page_attempts >= MAX_FINAL_PAGE_ATTEMPTS
+            or same_failure_count >= MAX_SAME_FINAL_PAGE_FAILURES
+        )
+
+        self.final_page_blocked = terminal
+        self.final_page_block_reason = cleaned_reason if terminal else None
+        return terminal
+
     def is_ready_to_return(self) -> bool:
         pending_exists = any(
             result.verification_status == VerificationStatus.PENDING
@@ -515,16 +628,21 @@ class ComparisonState:
         if not self.coverage_complete() or pending_exists:
             return False
 
-        # No inventory and unsuccessful verification are valid research outcomes.
         if not self.has_verified_results():
             return True
 
         if self.finished_without_winner_reason:
             return True
 
+        if not self.is_finalized():
+            return False
+
+        # Final confirmation may end safely without destroying the verified winner.
+        if self.final_page_blocked:
+            return True
+
         return (
-            self.is_finalized()
-            and self.final_page_verified
+            self.final_page_verified
             and self.staging_finished()
         )
 
@@ -537,6 +655,7 @@ class ComparisonState:
         self.final_page_url = None
         self.final_page_notes = None
         self.final_page_observation_id = None
+        self.reset_final_page_retry()
 
         # Reset transaction staging
         self.staging_url = None

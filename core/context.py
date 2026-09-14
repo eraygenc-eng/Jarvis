@@ -11,3 +11,4 @@ class RequestContext:
 
     # Mark whether this request is an active comparison research task.
     research_active: bool = False
+    interactive: bool = True

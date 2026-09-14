@@ -1,4 +1,7 @@
 import json
+from copy import deepcopy
+import hashlib
+import re
 
 from typing import Callable
 
@@ -9,6 +12,8 @@ from core.research.comparison_state import (
     ComparisonState,
     SourceStatus,
     VerificationStatus,
+    MAX_VERIFICATION_ATTEMPTS,
+    MAX_FINAL_PAGE_ATTEMPTS,
 )
 from core.research.ranking import (
     find_best_conditional,
@@ -31,6 +36,9 @@ from core.research.evidence import (
 )
 
 from core.research.offer_verification import OfferQuote, validate_quote, apply_quote, quote_prices
+from core.research.product_quote import ProductQuoteSelection, build_product_quote
+from core.research.discovery_evidence import ACCESS_FAILURE, access_failure_excerpt, has_discovery_identity
+from core.research.quote_evidence import visible_text
 
 from core.research.research_utils import (
     get_canonical_source,
@@ -38,11 +46,13 @@ from core.research.research_utils import (
     is_price_focused_query,
     url_belongs_to_source,
     normalize_price_condition,
+    normalize_identity,
 )
 
 from core.research.verification import (
     is_domain_url,
     validate_money_values,
+    urls_match,
 )
 
 
@@ -53,6 +63,23 @@ def create_research_tools(
     ],
     observation_store: ObservationStore,
 ) -> list:
+
+    def source_evidence(source: str, observation_id: str):
+        observation = observation_store.require_evidence(observation_id)
+        if not url_belongs_to_source(source, observation.page_url):
+            raise ValueError("Evidence must come from the direct source's own website.")
+        return observation
+
+    def failure_evidence(observation_id: str, excerpt: str):
+        observation = observation_store.require_evidence(observation_id)
+        if not excerpt.strip() or excerpt.casefold() not in observation.page_text.casefold():
+            raise ValueError("Copy the actual observed failure from the stored browser evidence.")
+        if observation.kind != "error" and not ACCESS_FAILURE.search(excerpt) and not re.search(
+            r"captcha|access denied|forbidden|erişim engell|robot|verify you are|unusual traffic|not found|bulunamadı|stokta yok|out of stock|tükendi",
+            excerpt, re.I,
+        ):
+            raise ValueError("This is not evidence of an access/availability failure. Quote-format errors need corrected refs, not a site blocker.")
+        return observation
 
     def describe_result(
         result: ComparisonResult | None,
@@ -70,6 +97,74 @@ def create_research_tools(
             f"condition={result.price_condition} | "
             f"verified={result.verified}"
         )
+
+    def terminal_verification_message(result: ComparisonResult) -> str | None:
+        if not result.verification_is_terminal():
+            return None
+        return (
+            f"VERIFICATION SKIPPED: {result.result_id} is already "
+            f"{result.verification_status.value}. Move to another offer "
+            "or continue the source research."
+        )
+
+    def record_validation_failure(
+        state: ComparisonState,
+        result: ComparisonResult,
+        error: ValueError | str,
+        *,
+        correction_hint: str = "",
+    ) -> str:
+        reason = str(error).strip()
+        terminal = result.record_verification_failure(reason)
+        state.reset_finalization()
+        refresh_source_rankings(state, result.source)
+
+        suffix = f" {correction_hint.strip()}" if correction_hint.strip() else ""
+
+        if terminal:
+            return (
+                f"VERIFICATION BLOCKED: {reason}{suffix}\n"
+                f"RETRY BUDGET EXHAUSTED: {result.result_id} is now terminal "
+                f"after {result.verification_attempts} failed verification attempt(s). "
+                "Do not verify this candidate again; move to another offer or source."
+            )
+
+        return (
+            f"VERIFICATION BLOCKED: {reason}{suffix}\n"
+            f"Verification failures: {result.verification_attempts}/"
+            f"{MAX_VERIFICATION_ATTEMPTS}. Correct the evidence and retry only "
+            "if there is a meaningful change."
+        )
+
+
+    def record_final_page_validation_failure(
+        state: ComparisonState,
+        result: ComparisonResult,
+        error: ValueError | str,
+        *,
+        correction_hint: str = "",
+    ) -> str:
+        """Record final-page evidence failure without invalidating the winner."""
+        reason = str(error).strip()
+        terminal = state.record_final_page_failure(reason)
+        suffix = f" {correction_hint.strip()}" if correction_hint.strip() else ""
+
+        if terminal:
+            return (
+                f"FINAL PAGE BLOCKED: {reason}{suffix}\n"
+                "RETRY BUDGET EXHAUSTED: final-page confirmation is now terminal "
+                f"after {state.final_page_attempts} failed attempt(s). "
+                f"{result.result_id} remains VERIFIED and finalized; report the "
+                "winner but state that the final page could not be freshly confirmed."
+            )
+
+        return (
+            f"FINAL PAGE BLOCKED: {reason}{suffix}\n"
+            f"Final-page failures: {state.final_page_attempts}/"
+            f"{MAX_FINAL_PAGE_ATTEMPTS}. The existing VERIFIED winner is preserved. "
+            "Retry only with meaningfully corrected fresh evidence."
+        )
+
 
     @tool
     def research_status() -> str:
@@ -260,6 +355,7 @@ def create_research_tools(
         source: str,
         query: str,
         note: str | None = None,
+        observation_id: str = "",
     ) -> str:
         """
         Record one distinct search/discovery attempt made on a research source.
@@ -297,6 +393,21 @@ def create_research_tools(
                 f"{canonical_source} must be in RESEARCHING state."
             )
 
+        try:
+            observation = source_evidence(canonical_source, observation_id)
+        except ValueError as error:
+            return f"DISCOVERY ATTEMPT REJECTED: {error}"
+        failure = access_failure_excerpt(observation)
+        if failure:
+            return (
+                "DISCOVERY ATTEMPT NOT COUNTED: The page is unavailable, not an empty search. "
+                "Use the site's actual search form if the URL is wrong; for an access block call "
+                "research_complete_source(outcome='blocked') with this observation_id and "
+                f"copied observed_evidence: {failure}"
+            )
+        fingerprint = hashlib.sha256((observation.page_url + "\n" + visible_text(observation.page_text)).encode()).hexdigest()
+        if any(item["fingerprint"] == fingerprint for item in source_state.discovery_evidence):
+            return "DISCOVERY ATTEMPT NOT COUNTED: This same page content was already recorded. Perform and inspect a different search."
         added = source_state.record_discovery_attempt(
             query=query,
             note=note,
@@ -307,6 +418,13 @@ def create_research_tools(
                 "DISCOVERY ATTEMPT NOT COUNTED: "
                 "The query was empty or has already been recorded."
             )
+
+        source_state.discovery_evidence.append({
+            "query": query.strip(), "observation_id": observation.observation_id,
+            "url": observation.page_url, "fingerprint": fingerprint,
+            "matching_product_visible": bool(state.target_product and has_discovery_identity(
+                observation.page_text, state.target_product, state.target_product)),
+        })
 
         return (
             "DISCOVERY ATTEMPT RECORDED.\n"
@@ -335,6 +453,7 @@ def create_research_tools(
         public_total: float | None = None,
         conditional_total: float | None = None,
         details: dict | None = None,
+        observation_id: str = "",
     ) -> str:
         """Store one offer found on the active source."""
 
@@ -430,6 +549,15 @@ def create_research_tools(
                 "price_condition."
             )
 
+        try:
+            discovery = source_evidence(canonical_source, observation_id)
+            if access_failure_excerpt(discovery):
+                raise ValueError("An error page cannot establish a discovered offer.")
+            if state.target_product and not has_discovery_identity(discovery.page_text, state.target_product, title):
+                raise ValueError("No single visible product title matches this candidate. Copy the candidate's actual title; unrelated recommendation text is not its identity.")
+        except ValueError as error:
+            return f"RESULT BLOCKED: {error}"
+
         result = ComparisonResult(
             title=title.strip(),
             source=canonical_source,
@@ -467,8 +595,78 @@ def create_research_tools(
             effective_total=effective_total,
             public_total=public_total,
             conditional_total=conditional_total,
-            details=details or {},
+            details={**(details or {}), "discovery_observation_id": discovery.observation_id},
         )
+
+        for existing in state.get_results_for_source(canonical_source):
+            # Fresh browser observations are evidence metadata, not offer identity.
+            existing_details = {
+                key: value for key, value in existing.details.items()
+                if key != "discovery_observation_id"
+            }
+            result_details = {
+                key: value for key, value in result.details.items()
+                if key != "discovery_observation_id"
+            }
+
+            same_exact_offer_url = (
+                bool(existing.offer_url)
+                and bool(result.offer_url)
+                and urls_match(existing.offer_url, result.offer_url)
+            )
+
+            # URL alone is not enough for travel: the same booking page may expose
+            # several rooms, flights or vehicle options. Require the stable visible
+            # identity to agree as well, while allowing one observation to omit an
+            # optional SKU/model/variant that another observation already captured.
+            stable_identity_matches = (
+                normalize_identity(existing.title) == normalize_identity(result.title)
+                and (
+                    not existing.seller
+                    or not result.seller
+                    or normalize_identity(existing.seller)
+                    == normalize_identity(result.seller)
+                )
+                and normalize_currency(existing.currency)
+                == normalize_currency(result.currency)
+                and all(
+                    not getattr(existing, field)
+                    or not getattr(result, field)
+                    or normalize_identity(str(getattr(existing, field)))
+                    == normalize_identity(str(getattr(result, field)))
+                    for field in ("model", "variant", "sku")
+                )
+            )
+
+            shared_detail_keys = set(existing_details) & set(result_details)
+            details_do_not_conflict = all(
+                existing_details[key] == result_details[key]
+                for key in shared_detail_keys
+            )
+
+            if (
+                same_exact_offer_url
+                and stable_identity_matches
+                and details_do_not_conflict
+            ):
+                return (
+                    f"STORED RESULT ALREADY EXISTS: {existing.result_id}. "
+                    "Continue its verification instead of creating a duplicate."
+                )
+
+            fields = (
+                "title", "model", "variant", "sku", "seller", "price",
+                "regular_price", "currency", "price_condition",
+                "shipping_cost", "url", "offer_url",
+            )
+            if (
+                all(getattr(existing, field) == getattr(result, field) for field in fields)
+                and existing_details == result_details
+            ):
+                return (
+                    f"STORED RESULT ALREADY EXISTS: {existing.result_id}. "
+                    "Continue its verification."
+                )
 
         state.add_result(result)
 
@@ -495,6 +693,8 @@ def create_research_tools(
         source: str,
         outcome: str,
         coverage_summary: str,
+        observation_id: str = "",
+        observed_evidence: str = "",
     ) -> str:
         """
         Finish one source.
@@ -560,6 +760,17 @@ def create_research_tools(
                 "coverage_summary is required."
             )
 
+        if status == SourceStatus.BLOCKED:
+            try:
+                observation = failure_evidence(observation_id, observed_evidence)
+                source_evidence(canonical_source, observation_id)
+            except ValueError as error:
+                return f"SOURCE COMPLETION BLOCKED: {error}"
+            source_state.discovery_evidence.append({
+                "query": "access failure", "observation_id": observation.observation_id,
+                "url": observation.page_url, "fingerprint": "error:" + observation.observation_id,
+            })
+
         if (
             status == SourceStatus.COMPLETED
             and not source_state.result_ids
@@ -572,6 +783,10 @@ def create_research_tools(
 
         # A completed source must have its current best offers verified
         if status == SourceStatus.COMPLETED:
+            evidence_ids = [r.details.get("discovery_observation_id")
+                            for r in state.get_results_for_source(canonical_source)]
+            if not source_state.discovery_evidence and not any(evidence_ids):
+                return "SOURCE COMPLETION BLOCKED: Record an actual discovery observation before completing this source."
             unverified_winners = get_unverified_source_winners(
                 state,
                 canonical_source,
@@ -597,9 +812,14 @@ def create_research_tools(
         # Do not allow NO_RESULTS after only a shallow search
         if status == SourceStatus.NO_RESULTS:
             minimum_discovery_attempts = 3
-
-            discovery_count = (
-                source_state.discovery_attempt_count()
+            if any(item.get("matching_product_visible") for item in source_state.discovery_evidence):
+                return "SOURCE COMPLETION BLOCKED: A recorded discovery contains a matching product. Store and investigate it; a rejected tool payload is not NO_RESULTS."
+            # Recheck archived evidence as well: error/challenge pages are never
+            # proof that the source has no matching inventory.
+            discovery_count = sum(
+                1 for item in source_state.discovery_evidence
+                if (observation := observation_store.get(item["observation_id"]))
+                and not access_failure_excerpt(observation)
             )
 
             if discovery_count < minimum_discovery_attempts:
@@ -676,6 +896,10 @@ def create_research_tools(
                 f"{result_id}"
             )
 
+        terminal_message = terminal_verification_message(result)
+        if terminal_message:
+            return terminal_message.replace("VERIFICATION SKIPPED", "OFFER URL BLOCKED", 1)
+
         cleaned_offer_url = offer_url.strip()
 
         if not cleaned_offer_url:
@@ -703,10 +927,10 @@ def create_research_tools(
 
         if result.offer_url != cleaned_offer_url:
             result.invalidate_verification()
+            result.reset_verification_retry()
+            state.reset_finalization()
 
         result.offer_url = cleaned_offer_url
-
-        state.reset_finalization()
 
         return (
             f"Stored direct offer URL for "
@@ -714,8 +938,7 @@ def create_research_tools(
         )
 
 
-    @tool
-    def research_verify_result(
+    def verify_result(
         result_id: str,
         observation_id: str,
         quote: OfferQuote,
@@ -733,6 +956,10 @@ def create_research_tools(
         if result is None:
             return "VERIFICATION BLOCKED: Result not found."
 
+        terminal_message = terminal_verification_message(result)
+        if terminal_message:
+            return terminal_message
+
         previous = quote_prices(result)
         result.invalidate_verification()
         state.reset_finalization()
@@ -740,8 +967,7 @@ def create_research_tools(
             observation = observation_store.require_current(observation_id)
             validate_quote(state, result, observation, quote)
         except ValueError as error:
-            refresh_source_rankings(state, result.source)
-            return f"VERIFICATION BLOCKED: {error}"
+            return record_validation_failure(state, result, error)
 
         apply_quote(result, observation, quote)
         refresh_source_rankings(state, result.source)
@@ -754,12 +980,80 @@ def create_research_tools(
             "Use current amounts in rankings. Missing comparable totals remain provisional."
         )
 
+    research_verify_result = tool("research_verify_result")(verify_result)
+
+    @tool
+    def research_verify_product(
+        result_id: str,
+        observation_id: str,
+        selection: ProductQuoteSelection,
+        final_check: bool = False,
+    ) -> str:
+        """Verify a product using snapshot REFS; Python copies evidence and parses prices.
+
+        Use this instead of writing a long quote for product research. For the
+        final winner, call research_finalize, take a NEW snapshot, then set
+        final_check=True. A changed final price reopens ranking as usual.
+        All refs must belong to the same offer. Never use this for travel.
+        """
+        state = get_state()
+        if state is None:
+            return "VERIFICATION BLOCKED: No active comparison research."
+        result = state.get_result(result_id.strip())
+        if result is None:
+            return "VERIFICATION BLOCKED: Result not found."
+
+        if final_check:
+            if not state.is_finalized():
+                return "FINAL PAGE BLOCKED: Research is not finalized."
+            if state.finalized_result_id != result.result_id:
+                return "FINAL PAGE BLOCKED: Wrong result."
+            if state.final_page_blocked:
+                return (
+                    "FINAL PAGE SKIPPED: final-page confirmation already exhausted "
+                    "its retry budget. The verified winner is preserved."
+                )
+        else:
+            terminal_message = terminal_verification_message(result)
+            if terminal_message:
+                return terminal_message
+
+        try:
+            observation = observation_store.require_current(observation_id)
+            quote = build_product_quote(state, observation, selection)
+        except ValueError as error:
+            if final_check:
+                return record_final_page_validation_failure(
+                    state,
+                    result,
+                    error,
+                    correction_hint=(
+                        "Correct the selected refs; do not translate or paraphrase evidence."
+                    ),
+                )
+
+            result.invalidate_verification()
+            return record_validation_failure(
+                state,
+                result,
+                error,
+                correction_hint=(
+                    "Correct the selected refs; do not translate or paraphrase evidence."
+                ),
+            )
+
+        if final_check:
+            return confirm_final_page(result_id, observation_id, quote)
+
+        return verify_result(result_id, observation_id, quote)
+
     @tool
     def research_block_verification(
         result_id: str,
         attempted_url: str,
         reason: str,
         observed_evidence: str,
+        observation_id: str = "",
     ) -> str:
         """
         Record an unsuccessful offer verification attempt.
@@ -795,8 +1089,21 @@ def create_research_tools(
                 "Provide the attempted URL, reason, and observed failure."
             )
 
-        # Preserve the observed offer and record the failed attempt.
+        try:
+            observation = failure_evidence(observation_id, observed_evidence)
+            if not urls_match(attempted_url, observation.page_url):
+                raise ValueError("Attempted URL does not match the browser evidence.")
+            if not any(urls_match(url, attempted_url) for url in (result.offer_url, result.url) if url):
+                raise ValueError("The failure must belong to this offer's recorded URL.")
+        except ValueError as error:
+            return f"VERIFICATION UPDATE REJECTED: {error}"
+
+        # Preserve the observed offer and record the actual site/access failure.
+        # Unlike quote/ref validation failures above, this is explicit terminal
+        # browser evidence and may block immediately.
         result.verified = False
+        result.verification_attempts += 1
+        result.last_verification_failure = reason
         result.verification_status = VerificationStatus.BLOCKED
         result.verification_reason = reason
 
@@ -807,6 +1114,7 @@ def create_research_tools(
                 "attempted_url": attempted_url,
                 "reason": reason,
                 "observed_evidence": observed_evidence,
+                "observation_id": observation.observation_id,
             }
         )
 
@@ -957,6 +1265,8 @@ def create_research_tools(
         state.final_page_verified = False
         state.final_page_url = None
         state.final_page_notes = None
+        state.final_page_observation_id = None
+        state.reset_final_page_retry()
         state.finished_without_winner_reason = None
 
         return (
@@ -965,59 +1275,107 @@ def create_research_tools(
         )
 
 
-    @tool
-    def research_confirm_final_page(
+    def confirm_final_page(
         result_id: str,
         observation_id: str,
         quote: OfferQuote,
     ) -> str:
         """Recheck the finalized offer using a NEW browser_snapshot and fresh quote.
 
-        Provide the same evidence structure as research_verify_result. A changed
-        price invalidates finalization and requires ranking again.
+        Final-page evidence selection is isolated from durable candidate
+        verification. Only a successfully validated fresh quote may update the
+        offer and reopen ranking.
         """
         state = get_state()
+
         if state is None or not state.is_finalized():
             return "FINAL PAGE BLOCKED: Research is not finalized."
+
         if state.finalized_result_id != result_id.strip():
             return "FINAL PAGE BLOCKED: Wrong result."
+
         winner = state.get_verified_result(result_id.strip())
+        if winner is None:
+            return "FINAL PAGE BLOCKED: Finalized winner is no longer verified."
+
+        if state.final_page_blocked:
+            return (
+                "FINAL PAGE SKIPPED: final-page confirmation already exhausted "
+                "its retry budget. The verified winner is preserved."
+            )
+
         state.final_page_verified = False
         state.final_page_url = None
         state.final_page_observation_id = None
+        state.final_page_notes = None
+
         try:
             observation = observation_store.require_current(observation_id)
+
             if observation.observation_id == winner.verification_observation_id:
-                return "FINAL PAGE BLOCKED: Take a new browser_snapshot after finalization."
+                return record_final_page_validation_failure(
+                    state,
+                    winner,
+                    "Take a new browser_snapshot after finalization.",
+                )
+
+            # Validate first without mutating durable result state.
             validate_quote(state, winner, observation, quote)
+
         except ValueError as error:
-            winner.invalidate_verification()
-            state.reset_finalization()
-            return f"FINAL PAGE BLOCKED: {error}"
+            return record_final_page_validation_failure(
+                state,
+                winner,
+                error,
+            )
 
         previous = quote_prices(winner)
-        winner.invalidate_verification()
-        state.reset_finalization()
-        apply_quote(winner, observation, quote)
-        refresh_source_rankings(state, winner.source)
-        if previous != quote_prices(winner):
+
+        # Compare transactionally on a copy.
+        refreshed = deepcopy(winner)
+        apply_quote(refreshed, observation, quote)
+        current = quote_prices(refreshed)
+
+        if previous != current:
+            # A real validated change may update the offer and reopen ranking.
+            apply_quote(winner, observation, quote)
+            refresh_source_rankings(state, winner.source)
+            state.reset_finalization()
+
             return (
-                "FINAL PAGE CHANGED: Fresh prices were stored. "
+                "FINAL PAGE CHANGED: Fresh prices/details were validated and stored. "
                 "Call research_rankings and research_finalize again. "
                 f"Previous: {json.dumps(previous, ensure_ascii=False)}; "
-                f"Current: {json.dumps(quote_prices(winner), ensure_ascii=False)}"
+                f"Current: {json.dumps(current, ensure_ascii=False)}"
             )
+
         if is_price_focused_query(state.query):
-            best = find_best_overall(state, verified_only=True)
+            best = find_best_overall(
+                state,
+                verified_only=True,
+                strict=True,
+            )
             if best is None or best.result_id != winner.result_id:
-                return "FINAL PAGE CHANGED: Recalculate the public winner before finalization."
+                return record_final_page_validation_failure(
+                    state,
+                    winner,
+                    "The finalized offer is no longer the current verified public winner.",
+                )
+
+        # Same valid offer: refresh evidence only after all checks pass.
+        apply_quote(winner, observation, quote)
+        refresh_source_rankings(state, winner.source)
 
         state.finalized_result_id = winner.result_id
+        state.reset_final_page_retry()
         state.final_page_verified = True
         state.final_page_url = observation.page_url
         state.final_page_observation_id = observation.observation_id
         state.final_page_notes = quote.notes
+
         return f"FINAL PAGE CONFIRMED: {winner.result_id}"
+
+    research_confirm_final_page = tool("research_confirm_final_page")(confirm_final_page)
 
     @tool
     def research_confirm_staging_page(
@@ -1169,6 +1527,7 @@ def create_research_tools(
     research_complete_source,
     research_set_offer_url,
     research_verify_result,
+    research_verify_product,
     research_rankings,
     research_finish_without_winner,
     research_finalize,

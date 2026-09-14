@@ -23,6 +23,10 @@ Browser behavior:
 - If the user asks to open a website in Chrome, use browser_navigate directly.
 - Use open_application only for desktop applications, not for websites.
 - Keep using the same browser session while completing a browsing task.
+- A browser action may return only a snapshot file link. Call browser_snapshot
+  to read the resulting page/dialog before choosing its next link. After opening
+  a shopping card, inspect its dialog and follow the actual merchant link;
+  never guess a product URL or skip reading the dialog.
 - If a popup, cookie banner, ad overlay, or similar element blocks the requested task, dismiss or close it before continuing.
 - Do not click advertisements unless the user explicitly asks for them.
 - Handle browser dialogs when they prevent progress.
@@ -60,15 +64,42 @@ on their own website. Comparison engines and snippets are discovery evidence onl
 
 If discovery is unsuccessful, vary or broaden the search meaningfully and call
 research_record_discovery_attempt after inspecting each real search. NO_RESULTS
-requires three distinct recorded attempts and no stored matching offers.
+requires three distinct recorded attempts with distinct browser evidence and no stored matching offers.
+Each discovery attempt and research_add_result MUST include observation_id from
+the actual discovery page's browser_snapshot. Copy the original discovery URL.
+For discovery use the visible title, price, currency and URL. Leave SKU, seller,
+shipping and totals empty when they are not explicitly established; they are
+optional. Do not turn a marketplace name into a seller or guess extra identifiers.
+For direct sources, that observation must be on the source's own website.
+For blocked sources/offers provide observation_id and copied observed_evidence
+from an actual browser error or access/availability failure. A quote-format error
+is NOT a site blocker. Correct the refs or leave research partial.
 Use BLOCKED for access failures, not as a substitute for trying the research.
+CAPTCHA/403/security pages are BLOCKED immediately; repeating three queries against
+the same challenge does not prove NO_RESULTS. Copy a short exact failure line,
+without adding your explanation inside observed_evidence.
+If a guessed search URL returns 404, open the homepage and use its actual search
+form. For an empty search, broaden to the model family (e.g. 'superlight') using
+the site's own search field; do not just vary punctuation or add more words.
 
 For each candidate:
 1. Open its exact seller/provider offer page and call research_set_offer_url.
    Follow comparison-engine redirects and new tabs to the actual merchant.
 2. Call browser_snapshot. Use its Observation ID and the smallest snapshot subtree
    that contains this offer. Avoid mixing prices from other sellers or offers.
-3. Call research_verify_result(result_id, observation_id, quote).
+3. For PRODUCT research call research_verify_product(result_id, observation_id,
+   selection). Supply offer_ref, identity_ref, seller_ref, actual seller name,
+   price_ref, currency, decimal_separator, quantity_ref and shipping_ref when shown.
+   Python copies the evidence and parses the amount. Example: a Turkish price
+   node '6.989 TL' uses decimal_separator=','; never put currency in amount_text.
+   Select the actual merchant seller, not the marketplace name. If it was unknown
+   during discovery leave seller empty then; do not store a guessed marketplace seller.
+   Use the narrowest refs. Avoid broad containers with alternative seller prices.
+   If selected refs are outside offer_ref, use the common container named in the
+   error; a new snapshot with the same wrong container will not fix it. If quantity
+   or shipping is absent, omit those refs and verify the available unit quote;
+   it stays separate from comparable full-request totals.
+   Use research_verify_result(result_id, observation_id, quote) for other categories.
    The quote contains copied identity and seller evidence, current prices,
    price-node references, explicit currency, scope and fee evidence.
 4. If a real attempt cannot verify an offer, call research_block_verification
@@ -113,6 +144,8 @@ A search with no matching inventory is a valid outcome; do not invent a winner.
 For a comparable winner, call research_finalize. Then navigate to that exact offer,
 take a NEW browser_snapshot and call
 research_confirm_final_page(result_id, observation_id, quote) with fresh evidence.
+For PRODUCTS use research_verify_product with final_check=True and refs from
+that NEW snapshot instead of writing a quote manually.
 If its price changes, use the updated quote, recalculate rankings and finalize again.
 A URL alone is not a final page confirmation.
 

@@ -71,6 +71,12 @@ def _build_pending_progress(
                 "variant": result.variant,
                 "sku": result.sku,
                 "offer_url": result.offer_url,
+                "verification_attempts": getattr(
+                    result, "verification_attempts", 0
+                ),
+                "last_verification_failure": getattr(
+                    result, "last_verification_failure", None
+                ),
             }
         )
 
@@ -273,6 +279,8 @@ def build_research_progress(
         ),
         "finalized_result": _build_finalized_result(state),
         "final_page_verified": state.final_page_verified,
+        "final_page_blocked": getattr(state, "final_page_blocked", False),
+        "final_page_block_reason": getattr(state, "final_page_block_reason", None),
         "staging": {
             "required": state.requires_staging,
             "status": _enum_value(state.staging_status),

@@ -51,6 +51,7 @@ TOOL_PERMISSIONS = {
 
     # Safe research verification tools
     "research_verify_result": ToolPermission.ALLOW,
+    "research_verify_product": ToolPermission.ALLOW,
     "research_finalize": ToolPermission.ALLOW,
     "research_start_source": ToolPermission.ALLOW,
     "research_complete_source": ToolPermission.ALLOW,
