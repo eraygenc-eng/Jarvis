@@ -13,6 +13,14 @@ from core.tools.desktop_control import (
     hotkey
 )
 
+from core.tools.screen_capture import ScreenCapture
+from core.vision.screen_vision import ScreenVision
+
+screen_capture = ScreenCapture()
+
+def create_screen_vision(model):
+    return ScreenVision(model)
+
 
 @tool
 def desktop_get_screen_size() -> dict[str, int]:
