@@ -9,6 +9,52 @@ pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
 
 
+# Common key name aliases used by LLMs and UI systems
+KEY_ALIASES = {
+    "arrowup": "up",
+    "uparrow": "up",
+    "arrowdown": "down",
+    "downarrow": "down",
+    "arrowleft": "left",
+    "leftarrow": "left",
+    "arrowright": "right",
+    "rightarrow": "right",
+    "return": "enter",
+    "escape": "esc",
+    "control": "ctrl",
+    "ctl": "ctrl",
+    "cmd": "command",
+    "windows": "win",
+    "spacebar": "space",
+    "pageup": "pgup",
+    "pagedown": "pgdn",
+    "meta": "win",
+    "super": "win",
+    "windowskey": "win",
+    "winkey": "win",
+}
+
+
+def _normalize_key(key: str) -> str:
+    """Convert common key name variants into PyAutoGUI key names."""
+
+    if not isinstance(key, str):
+        raise TypeError("key must be a string.")
+
+    normalized = (
+        key.lower()
+        .strip()
+        .replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+    )
+
+    return KEY_ALIASES.get(
+        normalized,
+        normalized
+    )
+
+
 
 def _validate_coordinates(x: int, y: int):
     """Validate that screen coordinates are inside the current display."""
@@ -152,7 +198,8 @@ def type_text(text: str):
 def press_key(key: str, presses: int = 1, interval: float = 0.05):
     """Press a keyboard key one or more times."""
 
-    key = key.lower().strip()
+    # Normalize common key name variants
+    key = _normalize_key(key)
 
     if key not in pyautogui.KEYBOARD_KEYS:
         raise ValueError(f"Unsupported key: {key}")
@@ -177,8 +224,9 @@ def press_key(key: str, presses: int = 1, interval: float = 0.05):
 def hotkey(*keys: str):
     """Press a keyboard shortcut."""
 
+    # Normalize all keys in the shortcut
     normalized_keys = [
-        key.lower().strip()
+        _normalize_key(key)
         for key in keys
     ]
 

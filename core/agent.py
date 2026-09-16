@@ -65,6 +65,8 @@ from core.tools.desktop_tools import (
     desktop_hotkey
 )
 
+from core.tools.desktop_vision_tools import create_desktop_vision_tools
+
 from core.tools.calculator import calculator
 from core.tools.open_application import open_application
 from core.tools.close_application import close_application
@@ -105,6 +107,11 @@ class JarvisAgent:
         research_tools = create_research_tools(
             get_state=lambda: self.current_comparison_state,
             observation_store=observation_store,
+        )
+
+        # Create desktop vision tools with the main Jarvis model
+        desktop_vision_tools = create_desktop_vision_tools(
+            self.llm.get_model()
         )
 
         # Measure model and tool execution times
@@ -162,6 +169,9 @@ class JarvisAgent:
         ]
 
         tools.extend(research_tools)
+
+        # Add desktop vision tools
+        tools.extend(desktop_vision_tools)
 
         if browser_tools:
             tools.extend(browser_tools)

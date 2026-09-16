@@ -53,7 +53,6 @@ TOOL_PERMISSIONS = {
     "desktop_move_mouse": ToolPermission.ALLOW,
     "desktop_scroll": ToolPermission.ALLOW,
     
-
     # Safe research verification tools
     "research_verify_result": ToolPermission.ALLOW,
     "research_verify_product": ToolPermission.ALLOW,
@@ -69,6 +68,14 @@ TOOL_PERMISSIONS = {
     "research_record_discovery_attempt": ToolPermission.ALLOW,
     "research_block_verification": ToolPermission.ALLOW,
     "research_read_observation": ToolPermission.ALLOW,
+
+    # Safe desktop perception tools
+    "desktop_inspect_screen": ToolPermission.ALLOW,
+    "desktop_get_screen_size": ToolPermission.ALLOW,
+    "desktop_get_mouse_position": ToolPermission.ALLOW,
+    "desktop_move_mouse": ToolPermission.ALLOW,
+    "desktop_scroll": ToolPermission.ALLOW,
+
 
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,
@@ -89,6 +96,16 @@ TOOL_PERMISSIONS = {
     "desktop_type_text": ToolPermission.CONDITIONAL,
     "desktop_press_key": ToolPermission.CONDITIONAL,
     "desktop_hotkey": ToolPermission.CONDITIONAL,
+
+    # Desktop actions need contextual security checks
+    "desktop_click_mouse": ToolPermission.CONDITIONAL,
+    "desktop_double_click": ToolPermission.CONDITIONAL,
+    "desktop_right_click": ToolPermission.CONDITIONAL,
+    "desktop_type_text": ToolPermission.CONDITIONAL,
+    "desktop_press_key": ToolPermission.CONDITIONAL,
+    "desktop_hotkey": ToolPermission.CONDITIONAL,
+
+
 
     # Tools that always need user confirmation
     "open_application": ToolPermission.CONFIRM,
