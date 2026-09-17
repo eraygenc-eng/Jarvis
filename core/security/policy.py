@@ -48,6 +48,9 @@ TOOL_PERMISSIONS = {
     "browser_hover": ToolPermission.ALLOW,
     "browser_wait_for": ToolPermission.ALLOW,
 
+    "open_application": ToolPermission.ALLOW,
+    "close_application": ToolPermission.ALLOW,
+
     "desktop_get_screen_size": ToolPermission.ALLOW,
     "desktop_get_mouse_position": ToolPermission.ALLOW,
     "desktop_move_mouse": ToolPermission.ALLOW,
@@ -108,8 +111,7 @@ TOOL_PERMISSIONS = {
 
 
     # Tools that always need user confirmation
-    "open_application": ToolPermission.CONFIRM,
-    "close_application": ToolPermission.CONFIRM,
+    
     "launch_game": ToolPermission.CONFIRM,
     "browser_file_upload": ToolPermission.CONFIRM,
     "browser_drop": ToolPermission.CONFIRM,
