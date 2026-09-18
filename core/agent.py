@@ -17,6 +17,9 @@ from core.llm.base import BaseLLM
 from core.context import RequestContext
 from core.prompt_middleware import request_prompt
 
+from core.planning.task_runtime import TaskRuntime, TaskCancelledError
+from core.planning.action_executor import ActionExecutor
+
 from core.research.task_classifier import (
     TaskType,
     classify_task,
@@ -192,6 +195,17 @@ class JarvisAgent:
             ],
             checkpointer=self.memory,
         )
+
+
+        # Manage active and cancelled tasks
+        self.task_runtime = TaskRuntime()
+
+        # Run agent actions through the task runtime
+        self.action_executor = ActionExecutor(
+            agent=self.agent,
+            task_runtime=self.task_runtime,
+        )
+
 
     def _build_research_continuation_prompt(self) -> str:
         state = self.current_comparison_state
@@ -626,13 +640,19 @@ No transaction action or approval request is part of this report.
                 "research_data": self._build_final_research_context(),
             }, ensure_ascii=False)},
         ]
+
         try:
             response = await self.llm.get_model().ainvoke(messages, config=config)
+
         except Exception:
             response = await self.llm.get_fallback_model().ainvoke(messages, config=config)
+
+
         self._refresh_final_page_status()
         report = extract_response_text(response.content) + "\n\n" + render_report_table(self.current_comparison_state, prompt)
         await self.agent.aupdate_state(config, {"messages": [AIMessage(content=report)]})
+
+        
         return report
 
     def _refresh_final_page_status(self) -> None:
@@ -692,6 +712,9 @@ No transaction action or approval request is part of this report.
         # Reset performance statistics for this request
         self.timing_callback.reset_request_stats()
 
+        # Start a new task for this user request
+        task = self.task_runtime.start_new_task()
+
         config = self._get_config()
 
         planning_start = time.perf_counter()
@@ -735,20 +758,21 @@ No transaction action or approval request is part of this report.
                 user_message=prompt,
                 research_active=(task_type == TaskType.COMPARISON),
                 interactive=interactive,
+                task_id=task.task_id,
+                turn_id=task.turn_id
             )
 
             research_start = time.perf_counter()
 
-            # Send the original user request to the agent
-            result = await self.agent.ainvoke(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ]
-                },
+            # Run the request through the action executor
+            result = await self.action_executor.execute_agent_turn(
+                task=task,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
                 config=config,
                 context=context,
             )
@@ -773,15 +797,15 @@ No transaction action or approval request is part of this report.
                     )
                     progress_before = self._research_progress_signature()
 
-                    result = await self.agent.ainvoke(
-                        {
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": continuation_prompt,
-                                }
-                            ]
-                        },
+                    # Continue the same task through the executor
+                    result = await self.action_executor.execute_agent_turn(
+                        task=task,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": continuation_prompt,
+                            }
+                        ],
                         config=config,
                         context=context,
                     )
@@ -827,6 +851,9 @@ No transaction action or approval request is part of this report.
                     f"{report_duration:.2f} seconds"
                 )
 
+                # Mark as a completed
+                self.task_runtime.complete_task(task.task_id)
+
                 return report
 
             # Get the final Jarvis response
@@ -834,7 +861,7 @@ No transaction action or approval request is part of this report.
 
             # Some models return text blocks
             if isinstance(content, list):
-                return "".join(
+                content = "".join(
                     block.get("text", "")
                     for block in content
                     if (
@@ -843,7 +870,29 @@ No transaction action or approval request is part of this report.
                     )
                 )
 
+            # Make sure the result still belongs to the active task
+            self.task_runtime.ensure_current(
+                task.task_id,
+                task.turn_id,
+            )
+
+            # Mark the task as completed
+            self.task_runtime.complete_task(task.task_id)
+
             return content
+
+
+        except TaskCancelledError:
+            # Do not publish results from an old task
+            return ""
+
+        except Exception as exc:
+            # Marking unexpected errors as failed
+            self.task_runtime.fail_task(
+                task.task_id,
+                task.turn_id
+            )
+            raise
 
         finally:
             self.timing_callback.print_summary()
