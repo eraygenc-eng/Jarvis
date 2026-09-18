@@ -179,6 +179,9 @@ class JarvisAgent:
         if browser_tools:
             tools.extend(browser_tools)
 
+        # Manage active and cancelled tasks
+        self.task_runtime = TaskRuntime()
+
         self.agent = create_agent(
             model=self.llm.get_model(),
             tools=tools,
@@ -196,9 +199,6 @@ class JarvisAgent:
             checkpointer=self.memory,
         )
 
-
-        # Manage active and cancelled tasks
-        self.task_runtime = TaskRuntime()
 
         # Run agent actions through the task runtime
         self.action_executor = ActionExecutor(
