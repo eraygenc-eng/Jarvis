@@ -14,7 +14,7 @@ class TaskCancellationMiddleware(AgentMiddleware):
         self.task_runtime = task_runtime
 
 
-    async def awrap_model_call(self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[Any]]) -> Any:
+    async def awrap_tool_call(self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[Any]]) -> Any:
         # Get the current request context
         context = request.runtime.context
 

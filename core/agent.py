@@ -19,6 +19,7 @@ from core.prompt_middleware import request_prompt
 
 from core.planning.task_runtime import TaskRuntime, TaskCancelledError
 from core.planning.action_executor import ActionExecutor
+from core.planning.task_cancellation_middleware import TaskCancellationMiddleware
 
 from core.research.task_classifier import (
     TaskType,
@@ -182,6 +183,11 @@ class JarvisAgent:
         # Manage active and cancelled tasks
         self.task_runtime = TaskRuntime()
 
+        # Check task cancellation around tool calls
+        task_cancellation_middleware = TaskCancellationMiddleware(
+            self.task_runtime
+        )
+
         self.agent = create_agent(
             model=self.llm.get_model(),
             tools=tools,
@@ -189,6 +195,7 @@ class JarvisAgent:
             middleware=[
                 request_prompt,
                 security_middleware,
+                task_cancellation_middleware,
                 research_completion_guard,
                 browser_context_middleware,
                 research_progress_middleware,
