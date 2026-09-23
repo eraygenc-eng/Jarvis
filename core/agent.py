@@ -79,7 +79,12 @@ from core.tools.web_search import web_search_tool
 
 from core.security.middleware import security_middleware
 from core.callbacks.timing import TimingCallback
+
+
 from core.research.report import render_report_table
+from core.research.research_state import ResearchState
+from core.research.research_controller import ResearchController
+
 
 
 class JarvisAgent:
@@ -101,6 +106,9 @@ class JarvisAgent:
 
         # Active comparison research
         self.current_comparison_state = None
+
+        # Active deterministic research controller
+        self.research_controller = None
 
         # Allow enough turns to cover every planned source, while stopping when
         # repeated model turns make no durable research progress.
@@ -752,6 +760,18 @@ No transaction action or approval request is part of this report.
                     )
                 )
 
+                # Create deterministic state for the new research
+                research_state = ResearchState(
+                    query=prompt,
+                    max_steps=self.max_research_continuations,
+                    max_no_progress=self.max_stalled_research_continuations,
+                )
+
+                # Control the research flow with deterministic rules
+                self.research_controller = ResearchController(
+                    research_state
+                )
+
             planning_duration = time.perf_counter() - planning_start
 
             print(
@@ -788,20 +808,24 @@ No transaction action or approval request is part of this report.
             continuation_count = 0
 
             # Continue comparison research when the model stops early
-            if task_type == TaskType.COMPARISON:
-                stalled_continuations = 0
-
+            if (
+                task_type == TaskType.COMPARISON
+                and self.research_controller is not None
+            ):
                 while (
                     self.current_comparison_state is not None
                     and not self.current_comparison_state.is_ready_to_return()
-                    and continuation_count
-                    < self.max_research_continuations
                 ):
+                    # Stop if the deterministic controller rejects a new step
+                    if not self.research_controller.start_step():
+                        break
+
                     continuation_count += 1
 
                     continuation_prompt = (
                         self._build_research_continuation_prompt()
                     )
+
                     progress_before = self._research_progress_signature()
 
                     # Continue the same task through the executor
@@ -816,16 +840,40 @@ No transaction action or approval request is part of this report.
                         config=config,
                         context=context,
                     )
+
                     self._refresh_final_page_status()
+
                     progress_after = self._research_progress_signature()
 
+                    # Track whether this step made useful research progress
                     if progress_after == progress_before:
-                        stalled_continuations += 1
+                        self.research_controller.record_no_progress()
                     else:
-                        stalled_continuations = 0
+                        self.research_controller.record_progress()
 
-                    if stalled_continuations >= self.max_stalled_research_continuations:
-                        break
+            if (
+                task_type == TaskType.COMPARISON
+                and self.research_controller is not None
+            ):
+                # Show deterministic research state
+                research_status = self.research_controller.get_status()
+
+                print(
+                    "[ResearchController] "
+                    f"steps={research_status['steps']}/"
+                    f"{research_status['max_steps']}, "
+                    f"sites={research_status['sites']}/"
+                    f"{research_status['max_sites']}, "
+                    f"no_progress={research_status['no_progress']}/"
+                    f"{research_status['max_no_progress']}, "
+                    f"finished={research_status['finished']}"
+                )
+
+                print(
+                    "[ResearchController] "
+                    f"finish_reason="
+                    f"{self.research_controller.state.finish_reason}"
+                )
 
             research_duration = time.perf_counter() - research_start
 
