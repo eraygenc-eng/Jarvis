@@ -7,7 +7,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 
 
 from langchain_core.tools import tool
-from mcp.types import TextContent
+from mcp.types import TextContent, CallToolResult
 
 from core.research.evidence import ObservationStore
 
@@ -44,22 +44,100 @@ class BrowserManager:
         self.observations = ObservationStore()
         self._action_lock = asyncio.Lock()
 
+        # Get the active research controller when needed
+        self._research_controller_getter = None
+
+
+
+    def set_research_controller_getter(self, getter):
+        # Store a func that returns the active controller
+        self._research_controller_getter = getter
+
+
+
+    def _get_research_controller(self):
+        # Research guard is disabled when no getter exits
+        if self._research_controller_getter is None:
+            return None
+
+        return self._research_controller_getter()
+
+    
+
     async def _track_browser_action(self, request, handler):
         # One shared browser must not navigate and capture different pages at once.
         async with self._action_lock:
-            self.observations.invalidate_current()
-            response = await handler(request)
-            # Keep actual navigation failures, so a model cannot invent blockers.
+            tool_name = getattr(request, "name", "")
             arguments = getattr(request, "args", {})
             url = arguments.get("url", "")
-            if getattr(response, "isError", False) and url.startswith(("http://", "https://")):
-                text = "\n".join(block.text for block in response.content if block.type == "text")
+
+            # Get the controller only when research is active
+            controller = self._get_research_controller()
+
+            # Guard only real web navigation during active research
+            if (
+                controller is not None
+                and tool_name == "browser_navigate"
+                and url.startswith(("http://", "https://"))
+            ):
+                # Stop repeated navigation inside the same agent turn
+                if controller.has_attempted_url(url):
+                    return CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text",
+                                text=(
+                                    "NAVIGATION SKIPPED: "
+                                    "This URL was already attempted "
+                                    "during the current research turn."
+                                ),
+                            )
+                        ],
+                        isError=False,
+                    )
+
+                # Remember this attempt before Playwright runs
+                controller.register_navigation_attempt(url)
+
+            # The current page may change after a browser action
+            self.observations.invalidate_current()
+
+            # Run the real Playwright action
+            response = await handler(request)
+
+            # Keep actual navigation failures, so a model cannot invent blockers
+            if (
+                getattr(response, "isError", False)
+                and url.startswith(("http://", "https://"))
+            ):
+                text = "\n".join(
+                    block.text
+                    for block in response.content
+                    if block.type == "text"
+                )
+
                 if text.strip():
-                    observation = self.observations.capture(url, text, kind="error")
-                    response = response.model_copy(update={"content": [
-                        *response.content,
-                        TextContent(type="text", text=f"Browser error Observation ID: {observation.observation_id}"),
-                    ]})
+                    observation = self.observations.capture(
+                        url,
+                        text,
+                        kind="error",
+                    )
+
+                    response = response.model_copy(
+                        update={
+                            "content": [
+                                *response.content,
+                                TextContent(
+                                    type="text",
+                                    text=(
+                                        "Browser error Observation ID: "
+                                        f"{observation.observation_id}"
+                                    ),
+                                ),
+                            ]
+                        }
+                    )
+
             return response
 
 

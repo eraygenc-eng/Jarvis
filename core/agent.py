@@ -777,6 +777,22 @@ No transaction action or approval request is part of this report.
             state.finished_without_winner_reason,
         )
 
+    def get_active_research_controller(self):
+        # No controller means there is no research guard
+        if self.research_controller is None:
+            return None
+
+        # Only use the controller during active comparison research
+        if(
+            self.current_comparison_state is None
+            or self.current_comparison_state.is_ready_to_return()
+        ):
+            return None
+
+        return self.research_controller
+
+    
+
     def _get_config(self) -> dict:
         return {
             "configurable": {
@@ -938,6 +954,10 @@ No transaction action or approval request is part of this report.
 
             research_start = time.perf_counter()
 
+            # Start a fresh navigation history for this agent turn
+            if self.research_controller is not None:
+                self.research_controller.reset_navigation_attempts()
+
             # Run the request through the action executor
             result = await self.action_executor.execute_agent_turn(
                 task=task,
@@ -974,6 +994,10 @@ No transaction action or approval request is part of this report.
                     )
 
                     progress_before = self._research_progress_signature()
+
+                    # Start a fresh navigation history for this continuation turn
+                    if self.research_controller is not None:
+                        self.research_controller.reset_navigation_attempts()
 
                     # Continue the same task through the executor
                     result = await self.action_executor.execute_agent_turn(

@@ -1,5 +1,71 @@
 from dataclasses import dataclass, field
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+
+
+TRACKING_QUERY_KEYS = {
+    "gclid",
+    "fbclid",
+    "msclkid",
+    "mc_cid",
+    "mc_eid",
+}
+
+
+def normalize_url(url: str) -> str:
+    cleaned_url = url.strip()
+
+    if not cleaned_url:
+        return ""
+
+    try:
+        parsed = urlsplit(cleaned_url)
+
+    except ValueError:
+        return cleaned_url
+
+    # Keep non-web URLs unchanged
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return cleaned_url
+
+    # Keep useful query parameters
+    query_items = []
+
+    for key, value in parse_qsl(
+        parsed.query,
+        keep_blank_values=True
+    ):
+        normalized_key = key.lower()
+
+        # Ignore UTM tracking parameters
+        if normalized_key.startswith("utm_"):
+            continue
+
+        # Ignore other known tracking parameters
+        if normalized_key in TRACKING_QUERY_KEYS:
+            continue
+
+        query_items.append((key, value))
+
+    normalized_query = urlencode(
+        query_items,
+        doseq=True  # Convert query items back into a valid URL query string
+    )
+
+    # Scheme and domain are case-insensitive
+    normalized_scheme = parsed.scheme.lower()
+    normalized_domain = parsed.netloc.lower()
+
+    # Url'yi tekrar birleştir
+    return urlunsplit(
+        (
+            normalized_scheme,
+            normalized_domain,
+            parsed.path,
+            normalized_query,
+            parsed.fragment,
+        )
+    )
 
 
 @dataclass
@@ -9,7 +75,10 @@ class ResearchState:
 
     visited_urls: set[str] = field(default_factory=set)  # set: Store visited URLs without duplicates.  
 
-    visited_sources: set[str] = field(default_factory=set)  # set: Store visited sources without duplicates.
+    # Store URLs attempted during the current agent turn
+    navigation_attempt_urls: set[str] = field(default_factory=set)
+
+    visited_sources: set[str] = field(default_factory=set)
 
     # Number of research actions
     step_count: int = 0
@@ -28,18 +97,63 @@ class ResearchState:
     finish_reason: str | None = None
 
 
+    def reset_navigation_attempts(self) -> None:
+        # Start a fresh navigation history for a new agent turn
+        self.navigation_attempt_urls.clear()
+
+
+    def has_attempted_url(self, url: str) -> bool:
+        normalized_url = normalize_url(url)
+
+        if not normalized_url:
+            return False
+
+
+        # Check whether this URL was already attempted in this turn
+        return normalized_url in self.navigation_attempt_urls
+
+
+    def register_navigation_attempt(self, url: str) -> bool:
+        normalized_url = normalize_url(url)
+
+        if not normalized_url:
+            return False
+
+        # Don't register the same attempt twice
+        if normalized_url in self.navigation_attempt_urls:
+            return False
+
+
+        # Store this navigation attempt for the current turn
+        self.navigation_attempt_urls.add(normalized_url)
+
+        return True
+    
+
+
+    def has_visited_url(self, url: str) -> bool:
+        normalized_url = normalize_url(url)
+
+        if not normalized_url:
+            return False
+
+        # Check without changing the research state
+        return normalized_url in self.visited_urls
+
+
     def register_url(self, url: str) -> bool:
-        cleaned_url = url.strip()
+        # Create one stable URL for duplicate detection
+        normalized_url = normalize_url(url)
 
-        if not cleaned_url:
+        if not normalized_url:
             return False
 
-        # Do not visit same url
-        if cleaned_url in self.visited_urls:
+        # Do not visit the same URL twice
+        if normalized_url in self.visited_urls:
             return False
 
-        # Store new url
-        self.visited_urls.add(cleaned_url)
+        # Store the normalized URL
+        self.visited_urls.add(normalized_url)
 
         return True
 

@@ -21,6 +21,26 @@ class ResearchController:
         return self.state.record_step()
 
 
+    def reset_navigation_attempts(self) -> None:
+        # Start a fresh navigation history for a new agent turn
+        self.state.reset_navigation_attempts()
+
+
+    def has_attempted_url(self, url: str) -> bool:
+        # Check whether this URL was already attempted in this turn
+        return self.state.has_attempted_url(url)
+
+
+    def register_navigation_attempt(self, url: str) -> bool:
+        # Store this navigation attempt for the current turn
+        return self.state.register_navigation_attempt(url)
+
+
+    def has_visited_url(self, url: str) -> bool:
+        # Check the URL without changing research state
+        return self.state.has_visited_url(url)
+
+
     def register_url(self, url: str) -> bool:
         # Do not accept new URLs after research stops
         if self.should_stop():

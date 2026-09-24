@@ -31,6 +31,9 @@ async def main():
         observation_store=browser.observations,
     )
 
+    # Let the browser access the active research controller
+    browser.set_research_controller_getter(agent.get_active_research_controller)
+
     print("Jarvis is ready. Type 'exit' to quit.")
 
     try:
