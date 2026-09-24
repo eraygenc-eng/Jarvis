@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 
 from core.llm.base import BaseLLM
 from core.research.comparison_state import ComparisonState
@@ -6,10 +7,21 @@ from core.research.comparison_state import ComparisonState
 from core.research.source_planner import (
     ProductType,
     ResearchCategory,
+    SourceSelection,
     detect_product_type,
     detect_research_category,
     plan_sources,
 )
+
+
+@dataclass
+class ComparisonSetup:
+    # Research state when the source plan is ready
+    state: ComparisonState | None
+
+    # Source-selection decision for this request
+    source_selection: SourceSelection
+
 
 
 def extract_response_text(content) -> str:
@@ -173,7 +185,8 @@ async def create_comparison_state(
     prompt: str,
     llm: BaseLLM,
     config: dict | None = None,
-) -> ComparisonState:
+    source_prompt: str | None = None
+) -> ComparisonSetup:
     # Try the fast keyword-based category detection first
     category = detect_research_category(prompt)
 
@@ -208,25 +221,46 @@ async def create_comparison_state(
                 config=config,
             )
 
+    # Use a separate prompt when resolving source clarification
+    planning_prompt = source_prompt or prompt
+
     # Plan sources using the resolved category and product type
-    sources = plan_sources(
-        prompt,
+    source_selection = plan_sources(
+        planning_prompt,
         category=category,
         product_type=product_type,
     )
+
+    # Stop before creating research state when
+    # the source request needs clarification
+    if source_selection.needs_clarification:
+        return ComparisonSetup(
+            state=None,
+            source_selection=source_selection,
+        )
 
     # Purchasable or bookable comparisons should end
     # at a safe pre-commit transaction stage
     requires_staging = False
 
-    # Create the initial comparison research state
-    return ComparisonState(
+    # Create the research state only after
+    # the source plan is fully resolved
+    state = ComparisonState(
         query=prompt,
         category=category.value,
         target_product=target_product,
-        criteria=product_criteria(prompt) if category == ResearchCategory.PRODUCT else {},
-        planned_sources=sources,
+        criteria=(
+            product_criteria(prompt)
+            if category == ResearchCategory.PRODUCT
+            else {}
+        ),
+        planned_sources=source_selection.sources,
         requires_staging=requires_staging,
+    )
+
+    return ComparisonSetup(
+        state=state,
+        source_selection=source_selection,
     )
 
 

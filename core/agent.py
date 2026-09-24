@@ -107,6 +107,12 @@ class JarvisAgent:
         # Active comparison research
         self.current_comparison_state = None
 
+        # Original comparison request waiting for source clarification
+        self.pending_comparison_prompt: str | None = None
+
+        # Number of sources requested by the user
+        self.pending_source_count: int | None = None
+
         # Active deterministic research controller
         self.research_controller = None
 
@@ -220,6 +226,69 @@ class JarvisAgent:
             agent=self.agent,
             task_runtime=self.task_runtime,
         )
+
+
+    def _build_source_clarification_message(
+        self,
+        prompt: str,
+        requested_count: int | None,
+    ) -> str:
+        # Detect the likely language of the user's request
+        normalized_prompt = prompt.lower()
+
+        turkish_markers = [
+            "bana",
+            "bak",
+            "bul",
+            "araştır",
+            "arastir",
+            "ucuz",
+            "fiyat",
+            "siteye",
+            "siteden",
+            "kaynaktan",
+        ]
+
+        english_markers = [
+            "find",
+            "search",
+            "check",
+            "compare",
+            "cheapest",
+            "price",
+            "website",
+            "source",
+            "look for",
+        ]
+
+        turkish_score = sum(
+            marker in normalized_prompt
+            for marker in turkish_markers
+        )
+
+        english_score = sum(
+            marker in normalized_prompt
+            for marker in english_markers
+        )
+
+        # Reply in English when the request is clearly English
+        if english_score > turkish_score:
+            if requested_count is not None:
+                return (
+                    f"Which {requested_count} websites "
+                    "would you like me to check?"
+                )
+
+            return "Which websites would you like me to check?"
+
+        # Use Turkish by default for Turkish or ambiguous requests
+        if requested_count is not None:
+            return (
+                f"Hangi {requested_count} siteye "
+                "bakmamı istersiniz?"
+            )
+
+        return "Hangi sitelere bakmamı istersiniz?"
 
 
     def _build_research_continuation_prompt(self) -> str:
@@ -735,8 +804,33 @@ No transaction action or approval request is part of this report.
         planning_start = time.perf_counter()
 
         try:
-            # Detect the task requested by the user
-            task_type = classify_task(prompt)
+            # Keep the original research request separate
+            # from a possible source-clarification answer
+            research_prompt = prompt
+            source_planning_prompt = prompt
+
+            # Check whether Jarvis is waiting for source clarification
+            resolving_source_clarification = (
+                self.pending_comparison_prompt is not None
+            )
+
+            if resolving_source_clarification:
+                # Restore the original comparison request
+                research_prompt = self.pending_comparison_prompt
+
+                # Combine the original request with the new source answer
+                # only for source planning
+                source_planning_prompt = (
+                    f"{research_prompt}\n\n"
+                    f"Source clarification:\n{prompt}"
+                )
+
+                # This turn belongs to the unfinished comparison setup
+                task_type = TaskType.COMPARISON
+
+            else:
+                # Normal task classification
+                task_type = classify_task(prompt)
 
             # Continue unfinished comparison research
             active_comparison = (
@@ -747,30 +841,56 @@ No transaction action or approval request is part of this report.
             if active_comparison:
                 task_type = TaskType.COMPARISON
 
-            # Create a new comparison state only for a new comparison
+            # Create a new comparison setup only for a new comparison
             if (
                 task_type == TaskType.COMPARISON
                 and not active_comparison
             ):
-                self.current_comparison_state = (
-                    await create_comparison_state(
-                        prompt,
-                        self.llm,
-                        config=config,
+                setup = await create_comparison_state(
+                    research_prompt,
+                    self.llm,
+                    config=config,
+                    source_prompt=source_planning_prompt,
+                )
+
+                # Stop before research when source selection is unclear
+                if setup.source_selection.needs_clarification:
+                    self.pending_comparison_prompt = research_prompt
+                    self.pending_source_count = (
+                        setup.source_selection.requested_count
                     )
-                )
 
-                # Create deterministic state for the new research
-                research_state = ResearchState(
-                    query=prompt,
-                    max_steps=self.max_research_continuations,
-                    max_no_progress=self.max_stalled_research_continuations,
-                )
+                    # Research must not exist before clarification
+                    self.current_comparison_state = None
+                    self.research_controller = None
 
-                # Control the research flow with deterministic rules
-                self.research_controller = ResearchController(
-                    research_state
-                )
+                else:
+                    # Source selection is resolved
+                    self.current_comparison_state = setup.state
+
+                    # Clear pending clarification state
+                    self.pending_comparison_prompt = None
+                    self.pending_source_count = None
+
+                    # A resolved setup must contain a research state
+                    if self.current_comparison_state is None:
+                        raise RuntimeError(
+                            "Comparison setup finished without a research state."
+                        )
+
+                    # Create deterministic state for the new research
+                    research_state = ResearchState(
+                        query=research_prompt,
+                        max_steps=self.max_research_continuations,
+                        max_no_progress=(
+                            self.max_stalled_research_continuations
+                        ),
+                    )
+
+                    # Control the research flow with deterministic rules
+                    self.research_controller = ResearchController(
+                        research_state
+                    )
 
             planning_duration = time.perf_counter() - planning_start
 
@@ -780,9 +900,36 @@ No transaction action or approval request is part of this report.
             )
 
 
+            planning_duration = time.perf_counter() - planning_start
+
+            print(
+                f"[Timing] Planning: "
+                f"{planning_duration:.2f} seconds"
+            )
+
+
+            # Ask for source clarification before starting any research
+            if (
+                task_type == TaskType.COMPARISON
+                and self.pending_comparison_prompt is not None
+                and self.current_comparison_state is None
+            ):
+                clarification_message = (
+                    self._build_source_clarification_message(
+                        self.pending_comparison_prompt,
+                        self.pending_source_count,
+                    )
+                )
+
+                # This turn is complete; research has not started
+                self.task_runtime.complete_task(task.task_id)
+
+                return clarification_message
+
+
             # Keep the real user message throughout this request.
             context = RequestContext(
-                user_message=prompt,
+                user_message=research_prompt,
                 research_active=(task_type == TaskType.COMPARISON),
                 interactive=interactive,
                 task_id=task.task_id,
@@ -797,7 +944,7 @@ No transaction action or approval request is part of this report.
                 messages=[
                     {
                         "role": "user",
-                        "content": prompt,
+                        "content": research_prompt,
                     }
                 ],
                 config=config,
@@ -895,7 +1042,7 @@ No transaction action or approval request is part of this report.
                 report_start = time.perf_counter()
 
                 report = await self._generate_research_report(
-                    prompt,
+                    research_prompt,
                     config,
                 )
 
