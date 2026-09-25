@@ -80,6 +80,15 @@ class ResearchState:
 
     visited_sources: set[str] = field(default_factory=set)
 
+    # Domains allowed for this research
+    allowed_domains: set[str] = field(default_factory=set)
+
+    # Source that can use different domains
+    dynamic_sources: set[str] = field(default_factory=set)
+
+    # Domains discovered for dynamic sources
+    dynamic_domains: dict[str, set[str]] = field(default_factory=dict)
+
     # Number of research actions
     step_count: int = 0
 
@@ -178,6 +187,100 @@ class ResearchState:
         self.visited_sources.add(cleaned_source)
 
         return True
+
+
+    def has_visited_source(self, source: str) -> bool:
+        cleaned_source = source.strip().lower()
+
+        if not cleaned_source:
+            return False
+
+        # Check if this source was already visited
+        return cleaned_source in self.visited_sources
+
+
+
+    def is_domain_allowed(self, source: str) -> bool:
+        cleaned_source = source.strip().lower()
+
+        if not cleaned_source:
+            return False
+
+        # No research domain restriction exists
+        if (
+            not self.allowed_domains
+            and not self.dynamic_sources
+        ):
+            return True
+
+        # Check fixed research domains
+        for allowed_domain in self.allowed_domains:
+            if (
+                cleaned_source == allowed_domain
+                or cleaned_source.endswith(
+                    "." + allowed_domain
+                )
+            ):
+                return True
+
+        # Check registered dynamic domains
+        if self.is_dynamic_domain_allowed(
+            cleaned_source
+        ):
+            return True
+
+        return False
+
+
+    def has_dynamic_sources(self) -> bool:
+        # Check if this research contains dynamic sources
+        return bool(self.dynamic_sources)
+
+
+    def register_dynamic_domain(self, source: str, domain: str) -> bool:
+        cleaned_source = source.strip()
+        cleaned_domain = domain.strip().lower()
+
+        if not cleaned_source or not cleaned_domain:
+            return False
+
+        # Only known dynamic sources can register domains
+        if cleaned_source not in self.dynamic_sources:
+            return False
+
+        # Create the domain set when needed
+        source_domains = self.dynamic_domains.setdefault(
+            cleaned_source,
+            set()
+        )
+
+        # Don't add the same domain twice
+        if cleaned_domain in source_domains:
+            return False
+
+        source_domains.add(cleaned_domain)
+
+        return True
+
+
+    def is_dynamic_domain_allowed(self, domain: str) -> bool:
+        cleaned_domain = domain.strip().lower()
+
+        if not cleaned_domain:
+            return False
+
+        # Check domains registered for every dynamic source
+        for source_domains in self.dynamic_domains.values():
+            for allowed_domain in source_domains:
+                if (
+                    cleaned_domain == allowed_domain
+                    or cleaned_domain.endswith(
+                        "." + allowed_domain
+                    )
+                ):
+                    return True
+
+        return False
 
 
 

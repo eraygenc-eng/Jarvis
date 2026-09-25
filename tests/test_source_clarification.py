@@ -136,6 +136,7 @@ class SourceClarificationTests(
         # Fake resolved comparison state
         comparison_state = SimpleNamespace(
             final_page_verified=False,
+            planned_sources = [],
             is_ready_to_return=lambda: True,
         )
 

@@ -84,6 +84,7 @@ from core.callbacks.timing import TimingCallback
 from core.research.report import render_report_table
 from core.research.research_state import ResearchState
 from core.research.research_controller import ResearchController
+from core.research.source_planner import get_source_domain, is_dynamic_source
 
 
 
@@ -125,6 +126,7 @@ class JarvisAgent:
         research_tools = create_research_tools(
             get_state=lambda: self.current_comparison_state,
             observation_store=observation_store,
+            get_controller=lambda: self.research_controller,
         )
 
         # Create desktop vision tools with the main Jarvis model
@@ -894,6 +896,22 @@ No transaction action or approval request is part of this report.
                             "Comparison setup finished without a research state."
                         )
 
+
+                    # Collect fixed and dynamic research sources
+                    allowed_domains = set()
+                    dynamic_sources = set()
+
+                    for source in self.current_comparison_state.planned_sources:
+                        # Store dynamic source types separately
+                        if is_dynamic_source(source):
+                            dynamic_sources.add(source)
+                            continue
+
+                        # Store known fixed domains
+                        allowed_domains.update(
+                            get_source_domain(source)
+                        )
+
                     # Create deterministic state for the new research
                     research_state = ResearchState(
                         query=research_prompt,
@@ -901,6 +919,8 @@ No transaction action or approval request is part of this report.
                         max_no_progress=(
                             self.max_stalled_research_continuations
                         ),
+                        allowed_domains=allowed_domains,
+                        dynamic_sources=dynamic_sources
                     )
 
                     # Control the research flow with deterministic rules

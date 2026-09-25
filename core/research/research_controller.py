@@ -57,6 +57,31 @@ class ResearchController:
         return self.state.register_source(source)
 
 
+    def has_visited_source(self, source: str) -> bool:
+        # Check if this source was already visited
+        return self.state.has_visited_source(source)
+
+
+    def is_domain_allowed(self, source: str) -> bool:
+        # Check if this domain is allowed by the research plan
+        return self.state.is_domain_allowed(source)
+
+
+    def has_dynamic_sources(self) -> bool:
+        # Check if this research contains dynamic sources
+        return self.state.has_dynamic_sources()
+
+
+    def register_dynamic_domain(self, source: str, domain: str) -> bool:
+        # Register a domain for a planned dynamic source
+        return self.state.register_dynamic_domain(source, domain)
+
+
+    def is_dynamic_domain_allowed(self, domain: str) -> bool:
+        # Check if a dynamic domain was already registered
+        return self.state.is_dynamic_domain_allowed(domain)
+
+
     def record_progress(self) -> None:
         # Reset the no-progress counter
         self.state.record_progress()

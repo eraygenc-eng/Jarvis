@@ -136,6 +136,9 @@ CATEGORY_SOURCES = {
         "Kayak",
         "Ucuzabilet",
         "Enuygun",
+        "Turkish Airlines",
+        "AJet",
+        "Pegasus",
         "Airline Official Websites",
     ],
 
@@ -184,6 +187,57 @@ PRODUCT_SOURCES = {
         "Ciceksepeti",
     ],
 }
+
+
+SOURCE_DOMAINS = {
+    # Product sources
+    "Trendyol": {"trendyol.com"},
+    "Hepsiburada": {"hepsiburada.com"},
+    "Akakce": {"akakce.com"},
+    "Ciceksepeti": {"ciceksepeti.com"},
+    "Vatan Computer": {"vatanbilgisayar.com"},
+    "Itopya": {"itopya.com"},
+
+    # Flight and travel sources
+    "Skyscanner": {"skyscanner.com", "skyscanner.com.tr"},
+    "Kayak": {"kayak.com", "kayak.com.tr"},
+    "Ucuzabilet": {"ucuzabilet.com"},
+    "Enuygun": {"enuygun.com"},
+    "Turkish Airlines": {"turkishairlines.com"},
+    "AJet": {"ajet.com"},
+    "Pegasus": {"flypgs.com", "pegasusairlines.com"},
+    "Booking": {"booking.com"},
+    "Agoda": {"agoda.com"},
+    "Airbnb": {"airbnb.com"},
+    "Limehome": {"limehome.com"},
+    "Rentalcars": {"rentalcars.com"},
+    "DiscoverCars": {"discovercars.com"},
+
+    # Google research sources
+    "Google Shopping": {"google.com", "google.com.tr"},
+    "Google Flights": {"google.com", "google.com.tr"},
+    "Google Hotels": {"google.com", "google.com.tr"},
+
+    # Job sources
+    "LinkedIn": {"linkedin.com"},
+    "Indeed": {"indeed.com"},
+}
+
+
+DYNAMIC_SOURCES = {
+    "Airline Official Websites",
+    "Company Career Pages",
+}
+
+
+def get_source_domain(source: str) -> set[str]:
+    # Return known domains for this source
+    return SOURCE_DOMAINS.get(source, set()).copy()
+
+
+def is_dynamic_source(source: str) -> bool:
+    # Check if this source can use different domains
+    return source in DYNAMIC_SOURCES
 
 
 COMPUTER_HARDWARE_KEYWORDS = [

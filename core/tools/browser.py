@@ -11,6 +11,8 @@ from mcp.types import TextContent, CallToolResult
 
 from core.research.evidence import ObservationStore
 
+from urllib.parse import urlparse
+
 
 class BrowserManager:
     def __init__(self, *, headless: bool = False):
@@ -62,6 +64,54 @@ class BrowserManager:
 
         return self._research_controller_getter()
 
+
+    def _get_source_from_url(self, url: str) -> str | None:
+        if not url:
+            return None
+
+        try:
+            parsed_url = urlparse(url)
+            hostname = parsed_url.hostname
+
+            if not hostname:
+                return None
+
+            # Normalize hostname
+            hostname = hostname.lower().strip()
+
+            # Treat www.example.com and example.com as the same source
+            if hostname.startswith("www."):
+                hostname = hostname[4:]
+
+            return hostname
+
+        except ValueError:
+            return None
+
+
+    def _can_visit_source(self, url: str) -> bool:
+        source = self._get_source_from_url(url)
+
+        if source is None:
+            return True
+
+        controller = self._get_research_controller()
+
+        # No active research controller means normal browsing
+        if controller is None:
+            return True
+
+        # Block domains outside the research plan
+        if not controller.is_domain_allowed(source):
+            return False
+
+        # Allow navigation inside an already visited source
+        if controller.has_visited_source(source):
+            return True
+
+        # Register a completely new source
+        return controller.register_source(source)
+
     
 
     async def _track_browser_action(self, request, handler):
@@ -95,6 +145,22 @@ class BrowserManager:
                         ],
                         isError=False,
                     )
+
+                # Allow only valid research sources
+                if not self._can_visit_source(url):
+                    return CallToolResult(
+                        content= [
+                            TextContent(
+                                type="text",
+                                text=(
+                                    "NAVIGATION SKIPPED: "
+                                    "This source is not allowed for the current research."
+                                ),
+                            )
+                        ],
+                        isError=False
+                    )
+                
 
                 # Remember this attempt before Playwright runs
                 controller.register_navigation_attempt(url)

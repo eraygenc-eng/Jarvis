@@ -30,6 +30,8 @@ from core.research.ranking import (
     no_winner_reason,
 )
 
+from urllib.parse import urlparse
+
 from core.research.evidence import (
     ObservationStore,
     get_snapshot_subtree,
@@ -62,6 +64,7 @@ def create_research_tools(
         ComparisonState | None,
     ],
     observation_store: ObservationStore,
+    get_controller: Callable[[], object | None] | None = None
 ) -> list:
 
     def source_evidence(source: str, observation_id: str):
@@ -349,6 +352,109 @@ def create_research_tools(
             f"SOURCE RESEARCH STARTED: "
             f"{canonical_source}"
         )
+
+
+    @tool
+    def research_register_dynamic_domain(source: str, url: str) -> str:
+        """
+        Register a discovered domain for a planned dynamic source.
+        """
+
+        state = get_state()
+
+        if state is None:
+            return (
+                "DYNAMIC DOMAIN BLOCKED: "
+                "No active comparison research."
+            )
+
+        if get_controller is None:
+            return(
+                "DYNAMIC DOMAIN BLOCKED: "
+                "Research controller is unavailable."
+            )
+
+        controller = get_controller()
+
+        if controller is None:
+            return(
+                "DYNAMIC DOMAIN BLOCKED: "
+                "No active research controller."
+            )
+
+        # Match the request source to research plan
+        canonical_source = get_canonical_source(
+            state.planned_sources,
+            source
+        )
+
+        if canonical_source is None:
+            return(
+                "DYNAMIC DOMAIN BLOCKED: "
+                "Source is not in the research plan."
+            )
+
+        source_state = state.get_source_state(canonical_source)
+
+        if source_state is None:
+            return "DYNAMIC DOMAIN BLOCK"
+
+
+        # Dynamic domains can only be added while researching this source
+        if source_state.status != SourceStatus.RESEARCHING:
+            return(
+                "DYNAMIC DOMAIN BLOCKED: "
+                "Start this source before registering a domain."
+            )
+
+        cleaned_url = url.strip()
+
+        try:
+            parsed_url = urlparse(cleaned_url)
+
+        except ValueError:
+            return(
+                "DYNAMIC DOMAIN BLOCKED: "
+                "Invalid URL."
+            )
+
+        if parsed_url.scheme not in {"http", "https"}:
+            return (
+                "DYNAMIC DOMAIN BLOCKED: "
+                "Only HTTP or HTTPS URLs are allowed."
+            )
+
+        domain = parsed_url.hostname
+
+        if not domain:
+            return (
+                "DYNAMIC DOMAIN BLOCKED: "
+                "URL has no valid domain."
+            )
+
+        # Normalize the discovered domain
+        domain = domain.strip().lower()
+
+        if domain.startswith("www."):
+            domain = domain[4:]
+
+        if not controller.register_dynamic_domain(
+            canonical_source,
+            domain
+        ):
+
+            return (
+                "DYNAMIC DOMAIN BLOCKED: "
+                "This source cannot register the domain "
+                "or the domain is already registered."
+            )
+
+        return (
+            "DYNAMIC DOMAIN REGISTERED: "
+            f"{canonical_source} -> {domain}"
+        )
+
+    
 
     @tool
     def research_record_discovery_attempt(
@@ -1534,5 +1640,6 @@ def create_research_tools(
     research_confirm_final_page,
     research_confirm_staging_page,
     research_mark_staging_blocked,
-    research_block_verification
+    research_block_verification,
+    research_register_dynamic_domain
     ]
