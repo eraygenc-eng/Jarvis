@@ -1133,10 +1133,9 @@ No transaction action or approval request is part of this report.
             return ""
 
         except Exception as exc:
-            # Marking unexpected errors as failed
+            # Mark unexpected errors as failed
             self.task_runtime.fail_task(
-                task.task_id,
-                task.turn_id
+                task.task_id
             )
             raise
 

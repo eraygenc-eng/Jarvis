@@ -10,7 +10,7 @@ from core.research.source_planner import (
     SourceSelection,
     detect_product_type,
     detect_research_category,
-    plan_sources,
+    plan_source_selection,
 )
 
 
@@ -225,7 +225,7 @@ async def create_comparison_state(
     planning_prompt = source_prompt or prompt
 
     # Plan sources using the resolved category and product type
-    source_selection = plan_sources(
+    source_selection = plan_source_selection(
         planning_prompt,
         category=category,
         product_type=product_type,

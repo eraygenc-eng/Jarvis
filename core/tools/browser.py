@@ -97,11 +97,11 @@ class BrowserManager:
 
         controller = self._get_research_controller()
 
-        # No active research controller means normal browsing
+        # No active research means normal browsing
         if controller is None:
             return True
 
-        # Block domains outside the research plan
+        # Block domains outside the current research plan
         if not controller.is_domain_allowed(source):
             return False
 
