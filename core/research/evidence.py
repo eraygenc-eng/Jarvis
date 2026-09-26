@@ -118,3 +118,285 @@ def get_snapshot_subtree(
             break
 
     return "\n".join(lines[start:end])
+
+
+
+def _extract_ref_from_line(
+    line: str,
+) -> str | None:
+    # Read the semantic ref from one snapshot line
+    match = re.search(
+        r"\[ref=([^\]]+)\]",
+        line,
+    )
+
+    if match is None:
+        return None
+
+    return match.group(1)
+
+
+def _find_parent_ref(
+    lines: list[str],
+    index: int,
+) -> str | None:
+    # Find the nearest parent node that has a semantic ref
+    current_indent = (
+        len(lines[index])
+        - len(lines[index].lstrip(" "))
+    )
+
+    for parent_index in range(index - 1, -1, -1):
+        line = lines[parent_index]
+
+        if not line.strip():
+            continue
+
+        indent = (
+            len(line)
+            - len(line.lstrip(" "))
+        )
+
+        if indent >= current_indent:
+            continue
+
+        current_indent = indent
+
+        ref = _extract_ref_from_line(line)
+
+        if ref is not None:
+            return ref
+
+    return None
+
+
+
+def get_focused_snapshot(
+    page_text: str,
+    focus: str,
+    *,
+    max_chars: int = 30000,
+    max_matches: int = 8,
+) -> str:
+    """Build a smaller model-facing snapshot around relevant nodes."""
+
+    cleaned_focus = " ".join(
+        focus.casefold().split()
+    )
+
+    # Split the focus into meaningful search terms
+    focus_terms = [
+        term
+        for term in re.findall(
+            r"[\w+-]+",
+            cleaned_focus,
+        )
+        if len(term) > 1 or term.isdigit()
+    ]
+
+    if not focus_terms:
+        return ""
+
+    lines = page_text.splitlines()
+    matching_indices: list[int] = []
+
+    # Words that describe the task, not the actual item identity
+    ignored_terms = {
+        "price",
+        "prices",
+        "fiyat",
+        "fiyatı",
+        "fiyati",
+        "fiyatlar",
+        "seller",
+        "sellers",
+        "satıcı",
+        "satıcılar",
+        "shipping",
+        "kargo",
+        "warranty",
+        "garanti",
+        "product",
+        "products",
+        "ürün",
+        "ürünler",
+        "offer",
+        "offers",
+        "teklif",
+        "teklifler",
+        "listing",
+        "listings",
+        "result",
+        "results",
+        "sonuç",
+        "sonuçlar",
+        "show",
+        "göster",
+        "find",
+        "bul",
+        "look",
+        "bak",
+        "current",
+        "güncel",
+        "page",
+        "sayfa",
+        "and",
+        "ve",
+        "with",
+        "ile",
+        "for",
+        "için",
+    }
+
+    identity_terms = [
+        term
+        for term in focus_terms
+        if term not in ignored_terms
+    ]
+
+    if not identity_terms:
+        identity_terms = focus_terms
+
+
+    def term_matches_line(
+        term: str,
+        normalized_line: str,
+    ) -> bool:
+        # Common accessibility-tree names for UI controls
+        aliases = {
+            "search": (
+                "search",
+                "searchbox",
+                "textbox",
+                "arama",
+                "ara",
+            ),
+            "arama": (
+                "search",
+                "searchbox",
+                "textbox",
+                "arama",
+                "ara",
+            ),
+            "box": (
+                "box",
+                "textbox",
+                "searchbox",
+                "input",
+            ),
+            "kutusu": (
+                "box",
+                "textbox",
+                "searchbox",
+                "input",
+            ),
+        }
+
+        candidates = aliases.get(
+            term,
+            (term,),
+        )
+
+        return any(
+            candidate in normalized_line
+            for candidate in candidates
+        )
+
+
+    term_count = len(identity_terms)
+
+    if term_count == 1:
+        minimum_matches = 1
+    elif term_count <= 3:
+        minimum_matches = 2
+    else:
+        minimum_matches = min(
+            4,
+            term_count,
+        )
+
+
+    for index, line in enumerate(lines):
+        normalized_line = " ".join(
+            line.casefold().split()
+        )
+
+        matched_terms = sum(
+            1
+            for term in identity_terms
+            if term_matches_line(
+                term,
+                normalized_line,
+            )
+        )
+
+        if matched_terms >= minimum_matches:
+            matching_indices.append(index)
+
+    if not matching_indices:
+        return ""
+
+    blocks: list[str] = []
+    used_refs: set[str] = set()
+    total_chars = 0
+
+    for index in matching_indices[:max_matches]:
+        own_ref = _extract_ref_from_line(
+            lines[index]
+        )
+
+        parent_ref = _find_parent_ref(
+            lines,
+            index,
+        )
+
+        # Prefer the parent because price/seller are often siblings
+        selected_ref = parent_ref or own_ref
+
+        if selected_ref is None:
+            continue
+
+        if selected_ref in used_refs:
+            continue
+
+        try:
+            block = get_snapshot_subtree(
+                page_text,
+                selected_ref,
+            )
+        except ValueError:
+            continue
+
+        # Avoid accidentally selecting a huge page-level container
+        if len(block) > 12000:
+            start = max(0, index - 6)
+            end = min(
+                len(lines),
+                index + 25,
+            )
+
+            block = "\n".join(
+                lines[start:end]
+            )
+
+        if (
+            total_chars
+            and total_chars + len(block)
+            > max_chars
+        ):
+            break
+
+        blocks.append(block)
+        used_refs.add(selected_ref)
+        total_chars += len(block)
+
+    if not blocks:
+        return ""
+
+    return (
+        "FOCUSED BROWSER SNAPSHOT\n"
+        f"Focus: {focus}\n"
+        "Only relevant page regions are shown here. "
+        "The complete snapshot remains stored as evidence.\n\n"
+        + "\n\n---\n\n".join(blocks)
+    )

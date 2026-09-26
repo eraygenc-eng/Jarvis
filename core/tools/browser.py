@@ -9,7 +9,10 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.tools import tool
 from mcp.types import TextContent, CallToolResult
 
-from core.research.evidence import ObservationStore
+from core.research.evidence import (
+    ObservationStore,
+    get_focused_snapshot,
+)
 
 from urllib.parse import urlparse
 
@@ -207,14 +210,27 @@ class BrowserManager:
             return response
 
 
-    async def capture_snapshot(self) -> str:
+    async def capture_snapshot(
+        self,
+        focus: str | None = None,
+    ) -> str:
         async with self._action_lock:
             self.observations.invalidate_current()
-            return await self._capture_snapshot()
+            return await self._capture_snapshot(
+                focus=focus,
+            )
 
-    async def _capture_snapshot(self) -> str:
+    async def _capture_snapshot(
+        self,
+        focus: str | None = None,
+    ) -> str:
         if self.session is None:
             return "OBSERVATION FAILED: Browser session is not started."
+
+
+        print(
+            f"[BrowserSnapshot] focus={focus!r}"
+        )
 
         # Read directly from the existing MCP session.
         response = await self.session.call_tool(
@@ -255,6 +271,13 @@ class BrowserManager:
         page_url = page_match.group(1)
         page_text = snapshot_match.group(1)
 
+        # Debug snapshot sizes before model-facing compaction
+        print(
+            "[BrowserSnapshot] "
+            f"raw={len(text):,} chars | "
+            f"snapshot={len(page_text):,} chars"
+        )
+
         if not page_text.strip():
             return (
                 "OBSERVATION NOT STORED: The page snapshot is empty.\n\n"
@@ -266,11 +289,46 @@ class BrowserManager:
             page_text=page_text,
         )
 
+
+        # Keep the full snapshot in ObservationStore,
+        # but send a smaller focused view to the model.
+        model_page_text = page_text
+        snapshot_mode = "full"
+
+        if focus:
+            focused_snapshot = get_focused_snapshot(
+                page_text,
+                focus,
+            )
+
+            print(
+                "[BrowserSnapshot] focused_result="
+                f"{len(focused_snapshot):,} chars"
+            )
+
+            if focused_snapshot.strip():
+                model_page_text = focused_snapshot
+                snapshot_mode = "focused"
+
+
+        print(
+            "[BrowserSnapshot] "
+            f"full={len(page_text):,} chars | "
+            f"model={len(model_page_text):,} chars | "
+            f"mode={snapshot_mode}"
+        )
+
         return (
             f"Observation ID: {observation.observation_id}\n"
             f"Captured at: {observation.captured_at.isoformat()}\n"
-            "This records page content, not a verified offer.\n\n"
-            + text
+            f"- Page URL: {page_url}\n"
+            f"Snapshot mode: {snapshot_mode}\n"
+            "This records page content, not a verified offer.\n"
+            "The complete snapshot remains stored as evidence.\n\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            f"{model_page_text}\n"
+            "```"
         )
 
     async def start(self):
@@ -286,14 +344,32 @@ class BrowserManager:
         )
 
         @tool
-        async def browser_snapshot() -> str:
+        async def browser_snapshot(
+            focus: str,
+        ) -> str:
             """
             Read the current page and store a browser observation.
+
+            focus MUST be a short, specific description of what you are
+            looking for on the current page.
+
+            Good examples:
+            - "iPhone 18 Pro"
+            - "RTX 5070"
+            - "flight Istanbul Berlin"
+            - "hotel room price"
+
+            Do not pass the whole user request as focus.
+
+            The full snapshot is preserved internally while the model
+            receives a smaller relevant view.
 
             Returns an observation ID when capture succeeds.
             The observation alone does not verify a price or seller.
             """
-            return await self.capture_snapshot()
+            return await self.capture_snapshot(
+                focus=focus,
+            )
 
         # Replace only the agent-facing snapshot tool.
         self.tools = [
