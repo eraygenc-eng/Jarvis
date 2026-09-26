@@ -87,9 +87,17 @@ Answer:
         config=config,
     )
 
+    # Show the raw model response for debugging
+    print("\n[DEBUG] RAW TARGET PRODUCT RESPONSE:")
+    print(repr(response.content))
+
     target_product = extract_response_text(
         response.content
     ).strip()
+
+    # Show the extracted product name
+    print("\n[DEBUG] EXTRACTED TARGET PRODUCT:")
+    print(repr(target_product))
 
     # Fall back safely when extraction fails.
     if not target_product:

@@ -69,6 +69,13 @@ from core.tools.desktop_tools import (
     desktop_hotkey
 )
 
+
+from core.research.comparison_state import (
+    SourceStatus,
+    VerificationStatus,
+)
+
+
 from core.tools.desktop_vision_tools import create_desktop_vision_tools
 
 from core.tools.calculator import calculator
@@ -122,6 +129,9 @@ class JarvisAgent:
         self.max_research_continuations = 20
         self.max_stalled_research_continuations = 2
 
+        # Maximum model cycles allowed for one research source
+        self.max_source_model_cycles = 20
+
         # Research tools use the active comparison state
         research_tools = create_research_tools(
             get_state=lambda: self.current_comparison_state,
@@ -162,11 +172,51 @@ class JarvisAgent:
 
             research_state = self.current_comparison_state
 
+            # Stop when the comparison already has enough data to return.
             if (
                 research_state is not None
                 and research_state.is_ready_to_return()
             ):
                 return {"jump_to": "end"}
+
+            controller = self.get_active_research_controller()
+
+            # Count the global research model-cycle budget.
+            if controller is not None:
+                if not controller.start_step():
+                    return {"jump_to": "end"}
+
+            # Count the model cycles of the currently active source.
+            if research_state is not None:
+                source_state = (
+                    research_state.get_researching_source_state()
+                )
+
+                if source_state is not None:
+                    if not source_state.record_model_cycle(
+                        self.max_source_model_cycles
+                    ):
+                        print(
+                            f"[SourceBudget] {source_state.source}: "
+                            f"LIMIT REACHED "
+                            f"({source_state.model_cycles}/"
+                            f"{self.max_source_model_cycles})"
+                        )
+
+                        self._finish_source_after_cycle_limit(
+                            source_state
+                        )
+
+                        # End only this agent turn.
+                        # The outer research loop can continue with the next source.
+                        return {"jump_to": "end"}
+
+                    # Show the current model-cycle usage for this source
+                    print(
+                        f"[SourceBudget] {source_state.source}: "
+                        f"{source_state.model_cycles}/"
+                        f"{self.max_source_model_cycles}"
+                    )
 
             return None
 
@@ -752,6 +802,49 @@ No transaction action or approval request is part of this report.
             state.final_page_url = None
             state.final_page_observation_id = None
 
+
+
+    def _finish_source_after_cycle_limit(
+        self,
+        source_state,
+    ) -> None:
+        state = self.current_comparison_state
+
+        if state is None:
+            return
+
+        reason = (
+            "source model-cycle budget reached "
+            f"({source_state.model_cycles}/"
+            f"{self.max_source_model_cycles})"
+        )
+
+        # Preserve observed offers but stop pending verification loops
+        for result in state.get_results_for_source(
+            source_state.source
+        ):
+            if (
+                result.verification_status
+                == VerificationStatus.PENDING
+            ):
+                result.verified = False
+                result.verification_status = (
+                    VerificationStatus.BLOCKED
+                )
+                result.verification_reason = reason
+
+        # Close only this source, not the whole research
+        state.complete_source(
+            source_state.source,
+            SourceStatus.LIMIT_REACHED,
+            reason,
+        )
+
+        # Any old final decision is no longer reliable
+        state.reset_finalization()
+
+
+
     def _research_progress_signature(self) -> tuple:
         state = self.current_comparison_state
         if state is None:
@@ -912,10 +1005,25 @@ No transaction action or approval request is part of this report.
                             get_source_domain(source)
                         )
 
+
+                    # Calculate a global budget from the number of planned sources
+                    planned_source_count = len(
+                        self.current_comparison_state.planned_sources
+                    )
+
+                    global_step_budget = min(
+                        100,
+                        max(
+                            40,
+                            planned_source_count * self.max_source_model_cycles + 10,
+                        ),
+                    )
+                    
+
                     # Create deterministic state for the new research
                     research_state = ResearchState(
                         query=research_prompt,
-                        max_steps=self.max_research_continuations,
+                        max_steps=global_step_budget,
                         max_no_progress=(
                             self.max_stalled_research_continuations
                         ),
@@ -1004,7 +1112,7 @@ No transaction action or approval request is part of this report.
                     and not self.current_comparison_state.is_ready_to_return()
                 ):
                     # Stop if the deterministic controller rejects a new step
-                    if not self.research_controller.start_step():
+                    if self.research_controller.should_stop():
                         break
 
                     continuation_count += 1

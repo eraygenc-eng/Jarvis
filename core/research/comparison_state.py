@@ -22,6 +22,7 @@ class SourceStatus(str, Enum):
     COMPLETED = "completed"
     NO_RESULTS = "no_results"
     BLOCKED = "blocked"
+    LIMIT_REACHED = "limit_reached"
 
 
 class VerificationStatus(str, Enum):
@@ -67,6 +68,9 @@ class SourceResearchState:
     # Number of research attempts
     attempts: int = 0
 
+    # Number of model cycles spent on this source
+    model_cycles: int = 0
+
     # Search queries actually tried while discovering offers on this source
     discovery_queries: list[str] = field(default_factory=list)
 
@@ -86,6 +90,7 @@ class SourceResearchState:
             SourceStatus.COMPLETED,
             SourceStatus.NO_RESULTS,
             SourceStatus.BLOCKED,
+            SourceStatus.LIMIT_REACHED,
         }
 
     def record_discovery_attempt(
@@ -121,6 +126,15 @@ class SourceResearchState:
 
     def discovery_attempt_count(self) -> int:
         return len(self.discovery_queries)
+
+
+    def record_model_cycle(self, max_cycles: int) -> bool:
+        # Stop this source when its model-cycle budget is exhausted
+        if self.model_cycles >= max_cycles:
+            return False
+
+        self.model_cycles += 1
+        return True
 
 
 @dataclass
@@ -398,6 +412,23 @@ class ComparisonState:
             None,
         )
 
+
+    def get_researching_source_state(
+        self,
+    ) -> SourceResearchState | None:
+        # Only one source should be researched at a time
+        for source in self.planned_sources:
+            source_state = self.get_source_state(source)
+
+            if (
+                source_state is not None
+                and source_state.status == SourceStatus.RESEARCHING
+            ):
+                return source_state
+
+        return None
+    
+
     def start_source(
         self,
         source: str,
@@ -411,6 +442,16 @@ class ComparisonState:
             return False
 
         if source_state.status == SourceStatus.RESEARCHING:
+            return False
+
+        # Do not research multiple sources at the same time
+        active_source = self.get_researching_source_state()
+
+        if (
+            active_source is not None
+            and active_source.source.casefold()
+            != source_state.source.casefold()
+        ):
             return False
 
         source_state.status = SourceStatus.RESEARCHING
@@ -433,6 +474,7 @@ class ComparisonState:
             SourceStatus.COMPLETED,
             SourceStatus.NO_RESULTS,
             SourceStatus.BLOCKED,
+            SourceStatus.LIMIT_REACHED
         }
 
         if status not in allowed_statuses:

@@ -89,7 +89,7 @@ class ResearchState:
     # Domains discovered for dynamic sources
     dynamic_domains: dict[str, set[str]] = field(default_factory=dict)
 
-    # Number of research actions
+    # Number of research model cycles
     step_count: int = 0
 
     max_steps: int = 20
