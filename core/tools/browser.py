@@ -174,6 +174,61 @@ class BrowserManager:
             # Run the real Playwright action
             response = await handler(request)
 
+            # Debug
+            if tool_name == "browser_find":
+                find_text = "\n".join(
+                    block.text
+                    for block in response.content
+                    if block.type == "text"
+                )
+
+                # Read the match count and searched text from Playwright output
+                match_info = re.search(
+                    r'Found\s+(\d+)\s+matches\s+for\s+"([^"]*)"',
+                    find_text,
+                    re.IGNORECASE,
+                )
+
+                match_count = None
+                searched_text = None
+
+                if match_info is not None:
+                    match_count = int(match_info.group(1))
+                    searched_text = match_info.group(2)
+
+                print(
+                    "[BrowserFind] "
+                    f"response={len(find_text):,} chars | "
+                    f"lines={len(find_text.splitlines()):,} | "
+                    f"matches={match_count}"
+                )
+
+                # Do not send huge, overly broad find results to the model
+                if len(find_text) > 12000:
+                    compact_text = (
+                        "BROWSER FIND RESULT TOO LARGE\n"
+                        f"Matches: {match_count if match_count is not None else 'unknown'}\n"
+                        f"Searched text: {searched_text or 'unknown'}\n\n"
+                        "The full result was omitted from model context because "
+                        "the search was too broad.\n"
+                        "Run browser_find again with a more specific phrase such as "
+                        "the exact product name, exact price, seller name, model, "
+                        "or another distinctive text.\n"
+                        "Do not conclude that the requested item is absent from "
+                        "this broad find result."
+                    )
+
+                    response = response.model_copy(
+                        update={
+                            "content": [
+                                TextContent(
+                                    type="text",
+                                    text=compact_text,
+                                )
+                            ]
+                        }
+                    )
+
             # Keep actual navigation failures, so a model cannot invent blockers
             if (
                 getattr(response, "isError", False)
@@ -299,6 +354,7 @@ class BrowserManager:
             focused_snapshot = get_focused_snapshot(
                 page_text,
                 focus,
+                page_url=page_url
             )
 
             print(

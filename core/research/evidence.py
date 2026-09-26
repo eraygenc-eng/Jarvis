@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ def get_focused_snapshot(
     page_text: str,
     focus: str,
     *,
+    page_url: str | None = None,
     max_chars: int = 30000,
     max_matches: int = 8,
 ) -> str:
@@ -246,7 +248,52 @@ def get_focused_snapshot(
         "ile",
         "for",
         "için",
+        "search",
+        "arama",
+        "searchbox",
+        "sonucu",
+        "sonuçları",
+        "ilan",
+        "ilanlar",
+        "ilanı",
+        "ilanları",
+        "list",
+        "liste",
+        "listesi",
+        "site",
+        "website",
+        "name",
+        "names",
+        "link",
+        "links",
+        "ana",
+        "home",
+        "homepage",
+        "main",
     }
+
+    # Do not treat the current website name as product identity
+    if page_url:
+        hostname = urlparse(page_url).hostname or ""
+
+        source_terms = {
+            part
+            for part in re.split(
+                r"[.\-_]+",
+                hostname.casefold(),
+            )
+            if (
+                len(part) > 2
+                and part not in {
+                    "www",
+                    "com",
+                    "net",
+                    "org",
+                }
+            )
+        }
+
+        ignored_terms.update(source_terms)
 
     identity_terms = [
         term
@@ -307,13 +354,14 @@ def get_focused_snapshot(
 
     if term_count == 1:
         minimum_matches = 1
-    elif term_count <= 3:
+
+    elif term_count == 2:
         minimum_matches = 2
+
     else:
-        minimum_matches = min(
-            4,
-            term_count,
-        )
+        # Three strong identity terms are enough to find
+        # a relevant product/container region.
+        minimum_matches = 3
 
 
     for index, line in enumerate(lines):

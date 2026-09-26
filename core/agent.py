@@ -8,6 +8,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import (
     ModelFallbackMiddleware,
     before_model,
+    wrap_model_call
 )
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -139,6 +140,13 @@ class JarvisAgent:
             get_controller=lambda: self.research_controller,
         )
 
+        # Keep research tool names so they can be hidden
+        # during normal non-comparison browsing.
+        research_tool_names = {
+            tool.name
+            for tool in research_tools
+        }
+
         # Create desktop vision tools with the main Jarvis model
         desktop_vision_tools = create_desktop_vision_tools(
             self.llm.get_model()
@@ -158,6 +166,33 @@ class JarvisAgent:
                 lambda: self.current_comparison_state
             )
         )
+
+
+        @wrap_model_call
+        async def research_tool_filter(
+            request,
+            handler,
+        ):
+            context = request.runtime.context
+
+            # Normal browsing does not need comparison-research tools.
+            if (
+                context is None
+                or not context.research_active
+            ):
+                filtered_tools = [
+                    tool
+                    for tool in (request.tools or [])
+                    if getattr(tool, "name", None)
+                    not in research_tool_names
+                ]
+
+                request = request.override(
+                    tools=filtered_tools,
+                )
+
+            return await handler(request)
+
 
         @before_model(can_jump_to=["end"])
         def research_completion_guard(state, runtime):
@@ -265,6 +300,7 @@ class JarvisAgent:
                 research_completion_guard,
                 browser_context_middleware,
                 research_progress_middleware,
+                research_tool_filter,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 ),

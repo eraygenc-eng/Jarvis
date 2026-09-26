@@ -85,10 +85,22 @@ def desktop_right_click(x: int, y: int, purpose: str) -> dict:
 
 
 @tool
-def desktop_scroll(amount: int) -> dict:
-    """Scroll vertically by the given amount."""
+def desktop_scroll(amount: int):
+    """
+    Scroll the screen.
 
-    return scroll(amount)
+    Amount must be between -100 and 100.
+    Positive values scroll up.
+    Negative values scroll down.
+    """
+
+    # Keep scroll amount inside the supported range
+    safe_amount = max(
+        -100,
+        min(100, amount),
+    )
+
+    return scroll(safe_amount)
 
 
 
