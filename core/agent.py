@@ -97,6 +97,11 @@ from core.research.source_planner import get_source_domain, is_dynamic_source
 
 
 class JarvisAgent:
+
+    # Default per-source model cycle budget
+    max_source_model_cycles = 20
+
+    
     def __init__(
         self,
         llm: BaseLLM,

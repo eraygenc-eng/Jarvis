@@ -49,6 +49,9 @@ class BrowserManager:
         self.observations = ObservationStore()
         self._action_lock = asyncio.Lock()
 
+        # Track whether the current page may have changed
+        self._page_changed = True
+
         # Get the active research controller when needed
         self._research_controller_getter = None
 
@@ -115,6 +118,18 @@ class BrowserManager:
         # Register a completely new source
         return controller.register_source(source)
 
+
+    def _browser_action_may_change_page(self, tool_name: str) -> bool:
+        # These tools only read browser state
+        read_only_tools = {
+            "browser_find",
+            "browser_snapshot",
+            "browser_take_screenshot",
+        }
+
+        # Unknown tools are treated as page-changing for safety
+        return tool_name not in read_only_tools
+
     
 
     async def _track_browser_action(self, request, handler):
@@ -168,8 +183,10 @@ class BrowserManager:
                 # Remember this attempt before Playwright runs
                 controller.register_navigation_attempt(url)
 
-            # The current page may change after a browser action
-            self.observations.invalidate_current()
+            # Invalidate the snapshot only when the action may change the page
+            if self._browser_action_may_change_page(tool_name):
+                self._page_changed = True
+                self.observations.invalidate_current()
 
             # Run the real Playwright action
             response = await handler(request)
@@ -270,10 +287,82 @@ class BrowserManager:
         focus: str | None = None,
     ) -> str:
         async with self._action_lock:
-            self.observations.invalidate_current()
+            # Reuse the current snapshot if the page did not change
+            if not self._page_changed:
+                observation_id = self.observations.current_observation_id
+
+                if observation_id is not None:
+                    observation = self.observations.get(observation_id)
+
+                    if (
+                        observation is not None
+                        and observation.kind == "page"
+                    ):
+                        print(
+                            "[BrowserSnapshot] cache_hit=True | "
+                            f"focus={focus!r}"
+                        )
+
+                        return self._format_observation(
+                            observation,
+                            focus=focus,
+                        )
+
+            # No reusable snapshot exists, so read the browser again
             return await self._capture_snapshot(
                 focus=focus,
             )
+
+
+    def _format_observation(
+        self,
+        observation,
+        focus: str | None = None,
+    ) -> str:
+        # Start with the complete stored snapshot
+        page_url = observation.page_url
+        page_text = observation.page_text
+
+        model_page_text = page_text
+        snapshot_mode = "full"
+
+        # Create a smaller model-facing view when focus is provided
+        if focus:
+            focused_snapshot = get_focused_snapshot(
+                page_text,
+                focus,
+                page_url=page_url,
+            )
+
+            print(
+                "[BrowserSnapshot] focused_result="
+                f"{len(focused_snapshot):,} chars"
+            )
+
+            if focused_snapshot.strip():
+                model_page_text = focused_snapshot
+                snapshot_mode = "focused"
+
+        print(
+            "[BrowserSnapshot] "
+            f"full={len(page_text):,} chars | "
+            f"model={len(model_page_text):,} chars | "
+            f"mode={snapshot_mode}"
+        )
+
+        return (
+            f"Observation ID: {observation.observation_id}\n"
+            f"Captured at: {observation.captured_at.isoformat()}\n"
+            f"- Page URL: {page_url}\n"
+            f"Snapshot mode: {snapshot_mode}\n"
+            "This records page content, not a verified offer.\n"
+            "The complete snapshot remains stored as evidence.\n\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            f"{model_page_text}\n"
+            "```"
+        )
+    
 
     async def _capture_snapshot(
         self,
@@ -344,47 +433,13 @@ class BrowserManager:
             page_text=page_text,
         )
 
-
-        # Keep the full snapshot in ObservationStore,
-        # but send a smaller focused view to the model.
-        model_page_text = page_text
-        snapshot_mode = "full"
-
-        if focus:
-            focused_snapshot = get_focused_snapshot(
-                page_text,
-                focus,
-                page_url=page_url
-            )
-
-            print(
-                "[BrowserSnapshot] focused_result="
-                f"{len(focused_snapshot):,} chars"
-            )
-
-            if focused_snapshot.strip():
-                model_page_text = focused_snapshot
-                snapshot_mode = "focused"
+        # The stored snapshot now matches the current page
+        self._page_changed = False
 
 
-        print(
-            "[BrowserSnapshot] "
-            f"full={len(page_text):,} chars | "
-            f"model={len(model_page_text):,} chars | "
-            f"mode={snapshot_mode}"
-        )
-
-        return (
-            f"Observation ID: {observation.observation_id}\n"
-            f"Captured at: {observation.captured_at.isoformat()}\n"
-            f"- Page URL: {page_url}\n"
-            f"Snapshot mode: {snapshot_mode}\n"
-            "This records page content, not a verified offer.\n"
-            "The complete snapshot remains stored as evidence.\n\n"
-            "### Snapshot\n"
-            "```yaml\n"
-            f"{model_page_text}\n"
-            "```"
+        return self._format_observation(
+            observation,
+            focus=focus,
         )
 
     async def start(self):

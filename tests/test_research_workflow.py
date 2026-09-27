@@ -7,9 +7,14 @@ from unittest.mock import AsyncMock
 
 from pydantic import PrivateAttr
 
+from core.tools.browser import BrowserManager
+
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+
+from mcp.types import TextContent, CallToolResult
 
 from core.research.comparison_state import (
     ComparisonResult, ComparisonState, SourceStatus, VerificationStatus,
@@ -466,6 +471,256 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             decision.action,
             SecurityAction.ALLOW,
+        )
+
+
+    async def test_snapshot_reuses_cache_when_page_did_not_change(self):
+
+        browser = BrowserManager()
+
+        snapshot_text = (
+            "### Page\n"
+            "- Page URL: https://example.com/product\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            '- heading "iPhone 18 Pro" [ref=e1]\n'
+            '- generic "Price: 50000 TL" [ref=e2]\n'
+            "```"
+        )
+
+        # Fake Playwright browser_snapshot response
+        browser.session = SimpleNamespace(
+            call_tool=AsyncMock(
+                return_value=CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=snapshot_text,
+                        )
+                    ],
+                    isError=False,
+                )
+            )
+        )
+
+        # First call must read the real browser
+        first_result = await browser.capture_snapshot(
+            focus="iPhone 18 Pro",
+        )
+
+        first_observation_id = (
+            browser.observations.current_observation_id
+        )
+
+        self.assertIsNotNone(first_observation_id)
+        self.assertFalse(browser._page_changed)
+
+        # Second call should reuse the stored snapshot
+        second_result = await browser.capture_snapshot(
+            focus="Price",
+        )
+
+        second_observation_id = (
+            browser.observations.current_observation_id
+        )
+
+        # MCP browser_snapshot must run only once
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            1,
+        )
+
+        # Both results must use the same stored observation
+        self.assertEqual(
+            first_observation_id,
+            second_observation_id,
+        )
+
+        self.assertIn(
+            first_observation_id,
+            first_result,
+        )
+
+        self.assertIn(
+            first_observation_id,
+            second_result,
+        )
+
+
+    async def test_page_changing_action_invalidates_snapshot_cache(self):
+
+        browser = BrowserManager()
+
+        snapshot_text = (
+            "### Page\n"
+            "- Page URL: https://example.com/product\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            '- heading "iPhone 18 Pro" [ref=e1]\n'
+            '- generic "Price: 50000 TL" [ref=e2]\n'
+            "```"
+        )
+
+        browser.session = SimpleNamespace(
+            call_tool=AsyncMock(
+                return_value=CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=snapshot_text,
+                        )
+                    ],
+                    isError=False,
+                )
+            )
+        )
+
+        # First snapshot reads the browser
+        await browser.capture_snapshot(
+            focus="iPhone 18 Pro",
+        )
+
+        first_observation_id = (
+            browser.observations.current_observation_id
+        )
+
+        self.assertFalse(browser._page_changed)
+
+        # Simulate a browser action that may change the page
+        request = SimpleNamespace(
+            name="browser_click",
+            args={},
+        )
+
+        async def handler(request):
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text="Clicked",
+                    )
+                ],
+                isError=False,
+            )
+
+        await browser._track_browser_action(
+            request,
+            handler,
+        )
+
+        # The old snapshot must now be invalid
+        self.assertTrue(browser._page_changed)
+
+        self.assertIsNone(
+            browser.observations.current_observation_id
+        )
+
+        # Next snapshot must read the browser again
+        await browser.capture_snapshot(
+            focus="iPhone 18 Pro",
+        )
+
+        second_observation_id = (
+            browser.observations.current_observation_id
+        )
+
+        # MCP snapshot should now have been called twice
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            2,
+        )
+
+        # A new observation must be created
+        self.assertNotEqual(
+            first_observation_id,
+            second_observation_id,
+        )
+
+        self.assertFalse(browser._page_changed)
+
+
+    async def test_browser_find_does_not_invalidate_snapshot_cache(self):
+        browser = BrowserManager()
+
+        snapshot_text = (
+            "### Page\n"
+            "- Page URL: https://example.com/product\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            '- heading "iPhone 18 Pro" [ref=e1]\n'
+            '- generic "Price: 50000 TL" [ref=e2]\n'
+            "```"
+        )
+
+        browser.session = SimpleNamespace(
+            call_tool=AsyncMock(
+                return_value=CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=snapshot_text,
+                        )
+                    ],
+                    isError=False,
+                )
+            )
+        )
+
+        # First snapshot reads the real browser
+        await browser.capture_snapshot(
+            focus="iPhone 18 Pro",
+        )
+
+        first_observation_id = (
+            browser.observations.current_observation_id
+        )
+
+        self.assertFalse(browser._page_changed)
+
+        # browser_find only reads the current page
+        request = SimpleNamespace(
+            name="browser_find",
+            args={"text": "Price"},
+        )
+
+        async def handler(request):
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text='Found 1 matches for "Price"',
+                    )
+                ],
+                isError=False,
+            )
+
+        await browser._track_browser_action(
+            request,
+            handler,
+        )
+
+        # Cache must still be valid
+        self.assertFalse(browser._page_changed)
+
+        self.assertEqual(
+            browser.observations.current_observation_id,
+            first_observation_id,
+        )
+
+        # Another snapshot should reuse the cache
+        await browser.capture_snapshot(
+            focus="Price",
+        )
+
+        # Real MCP snapshot must still have run only once
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            1,
+        )
+
+        self.assertEqual(
+            browser.observations.current_observation_id,
+            first_observation_id,
         )
 
 
