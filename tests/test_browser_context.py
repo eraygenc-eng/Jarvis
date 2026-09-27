@@ -21,6 +21,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
+
 from langchain_core.outputs import (
     ChatGeneration,
     ChatResult,
@@ -91,6 +92,33 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             content=content,
             tool_call_id=tool_call_id,
             name="browser_snapshot",
+        )
+
+    def _auto_observation_message(
+        self,
+        observation,
+        tool_call_id: str,
+        page_text: str,
+    ) -> ToolMessage:
+        content = (
+            "Clicked element successfully.\n\n"
+            "AUTO CURRENT PAGE OBSERVATION\n"
+            "A fresh browser observation was captured automatically.\n\n"
+            f"Observation ID: {observation.observation_id}\n"
+            f"Captured at: {observation.captured_at.isoformat()}\n"
+            f"- Page URL: {observation.page_url}\n"
+            "Snapshot mode: focused\n"
+            "This records page content, not a verified offer.\n\n"
+            "### Snapshot\n"
+            "```yaml\n"
+            f"{page_text}\n"
+            "```"
+        )
+
+        return ToolMessage(
+            content=content,
+            tool_call_id=tool_call_id,
+            name="browser_click",
         )
 
     def _assistant_call(
@@ -177,6 +205,7 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             compacted[1].tool_call_id,
             "call-1",
         )
+
         self.assertEqual(
             compacted[1].name,
             "browser_snapshot",
@@ -187,6 +216,7 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             compacted[3].content,
             recent_original_content,
         )
+
         self.assertEqual(
             compacted[5].content,
             current_original_content,
@@ -212,6 +242,145 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             observation_3.observation_id,
         )
 
+    def test_old_auto_observation_is_compacted_without_losing_action_result(self):
+        store = ObservationStore()
+
+        old_page = "OLD AUTO OBSERVATION DATA " * 400
+        recent_page = "RECENT SNAPSHOT DATA " * 400
+        current_page = "CURRENT SNAPSHOT DATA " * 400
+
+        old_observation = store.capture(
+            "https://example.com/old-product",
+            old_page,
+        )
+
+        recent_observation = store.capture(
+            "https://example.com/recent",
+            recent_page,
+        )
+
+        current_observation = store.capture(
+            "https://example.com/current",
+            current_page,
+        )
+
+        messages = [
+            self._assistant_call("call-1"),
+            self._auto_observation_message(
+                old_observation,
+                "call-1",
+                old_page,
+            ),
+            self._assistant_call("call-2"),
+            self._snapshot_message(
+                recent_observation,
+                "call-2",
+                recent_page,
+            ),
+            self._assistant_call("call-3"),
+            self._snapshot_message(
+                current_observation,
+                "call-3",
+                current_page,
+            ),
+        ]
+
+        original_content = messages[1].content
+
+        compacted = compact_old_browser_snapshots(
+            messages,
+            store,
+        )
+
+        # The browser action result itself must survive.
+        self.assertIn(
+            "Clicked element successfully.",
+            compacted[1].content,
+        )
+
+        # Only the embedded old observation should be archived.
+        self.assertIn(
+            "ARCHIVED AUTO BROWSER OBSERVATION",
+            compacted[1].content,
+        )
+
+        # Large old page content should disappear from model input.
+        self.assertNotIn(
+            "OLD AUTO OBSERVATION DATA",
+            compacted[1].content,
+        )
+
+        self.assertLess(
+            len(compacted[1].content),
+            len(original_content),
+        )
+
+        # Tool identity must remain a browser_click.
+        self.assertEqual(
+            compacted[1].name,
+            "browser_click",
+        )
+
+        self.assertEqual(
+            compacted[1].tool_call_id,
+            "call-1",
+        )
+
+        # Full evidence must still exist outside model context.
+        self.assertEqual(
+            store.get(
+                old_observation.observation_id
+            ).page_text,
+            old_page,
+        )
+
+        # Current observation remains the newest one.
+        self.assertEqual(
+            store.current_observation_id,
+            current_observation.observation_id,
+        )
+
+    def test_current_auto_observation_is_not_compacted(self):
+        store = ObservationStore()
+
+        page = "CURRENT AUTO OBSERVATION DATA " * 400
+
+        observation = store.capture(
+            "https://example.com/current-product",
+            page,
+        )
+
+        messages = [
+            self._assistant_call("call-1"),
+            self._auto_observation_message(
+                observation,
+                "call-1",
+                page,
+            ),
+        ]
+
+        original_content = messages[1].content
+
+        compacted = compact_old_browser_snapshots(
+            messages,
+            store,
+        )
+
+        self.assertEqual(
+            compacted[1].content,
+            original_content,
+        )
+
+        self.assertNotIn(
+            "ARCHIVED AUTO BROWSER OBSERVATION",
+            compacted[1].content,
+        )
+
+        self.assertIn(
+            "CURRENT AUTO OBSERVATION DATA",
+            compacted[1].content,
+        )
+
     async def test_middleware_compacts_only_model_request(self):
         store = ObservationStore()
 
@@ -223,10 +392,12 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             "https://example.com/old",
             page_1,
         )
+
         observation_2 = store.capture(
             "https://example.com/recent",
             page_2,
         )
+
         observation_3 = store.capture(
             "https://example.com/current",
             page_3,
@@ -308,6 +479,7 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             "ARCHIVED BROWSER SNAPSHOT",
             model_messages[3].content,
         )
+
         self.assertNotIn(
             "ARCHIVED BROWSER SNAPSHOT",
             model_messages[5].content,
@@ -324,10 +496,12 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             "https://example.com/old",
             page_1,
         )
+
         observation_2 = store.capture(
             "https://example.com/recent",
             page_2,
         )
+
         observation_3 = store.capture(
             "https://example.com/current",
             page_3,
@@ -436,7 +610,6 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             page_1,
         )
 
-
     def test_old_completed_tool_groups_are_pruned_only_after_threshold(self):
         store = ObservationStore()
 
@@ -511,7 +684,6 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             "ARCHIVED BROWSER SNAPSHOT",
             current_snapshot.content,
         )
-
 
     def test_incomplete_multi_tool_group_is_protected(self):
         messages = [

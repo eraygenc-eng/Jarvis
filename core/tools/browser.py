@@ -52,8 +52,17 @@ class BrowserManager:
         # Track whether the current page may have changed
         self._page_changed = True
 
+        # Remember the latest semantic snapshot focus so page-changing
+        # browser actions can reuse the same target for automatic observations.
+        self._last_snapshot_focus: str | None = None
+
         # Get the active research controller when needed
         self._research_controller_getter = None
+
+
+    def reset_request_focus(self) -> None:
+        # Do not carry a semantic snapshot focus into a new user request.
+        self._last_snapshot_focus = None
 
 
 
@@ -129,6 +138,14 @@ class BrowserManager:
 
         # Unknown tools are treated as page-changing for safety
         return tool_name not in read_only_tools
+
+
+    def _should_auto_observe_after_action(self, tool_name: str) -> bool:
+        # Requires a fresh observation before the next decision
+        return tool_name in {
+            "browser_click",
+            "browser_navigate"
+        }
 
     
 
@@ -279,6 +296,38 @@ class BrowserManager:
                         }
                     )
 
+            # After a successful page-changing click, capture the new page state
+            # immediately when an explicit semantic focus is already known.
+            if (
+                not getattr(response, "isError", False)
+                and self._should_auto_observe_after_action(tool_name)
+                and self._last_snapshot_focus
+            ):
+                auto_observation = await self._capture_snapshot(
+                    focus=self._last_snapshot_focus,
+                )
+
+                response = response.model_copy(
+                    update={
+                        "content": [
+                            *response.content,
+                            TextContent(
+                                type="text",
+                                text=(
+                                    "AUTO CURRENT PAGE OBSERVATION\n"
+                                    "A fresh browser observation was captured automatically "
+                                    "after this action.\n"
+                                    "Use this observation directly for the next decision. "
+                                    "Do not request another browser_snapshot unless this "
+                                    "observation lacks the information you need or the page "
+                                    "changes again.\n\n"
+                                    f"{auto_observation}"
+                                ),
+                            ),
+                        ]
+                    }
+                )
+
             return response
 
 
@@ -286,6 +335,13 @@ class BrowserManager:
         self,
         focus: str | None = None,
     ) -> str:
+
+        # Normalize and remember the latest meaningful focus
+        normalized_focus = focus.strip() if focus else None
+
+        if normalized_focus:
+            self._last_snapshot_focus = normalized_focus
+
         async with self._action_lock:
             # Reuse the current snapshot if the page did not change
             if not self._page_changed:
@@ -300,17 +356,17 @@ class BrowserManager:
                     ):
                         print(
                             "[BrowserSnapshot] cache_hit=True | "
-                            f"focus={focus!r}"
+                            f"focus={normalized_focus!r}"
                         )
 
                         return self._format_observation(
                             observation,
-                            focus=focus,
+                            focus=normalized_focus,
                         )
 
             # No reusable snapshot exists, so read the browser again
             return await self._capture_snapshot(
-                focus=focus,
+                focus=normalized_focus,
             )
 
 

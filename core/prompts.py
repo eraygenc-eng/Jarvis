@@ -23,10 +23,17 @@ Browser behavior:
 - If the user asks to open a website in Chrome, use browser_navigate directly.
 - Use open_application only for desktop applications, not for websites.
 - Keep using the same browser session while completing a browsing task.
-- A browser action may return only a snapshot file link. Call browser_snapshot
-  to read the resulting page/dialog before choosing its next link. After opening
-  a shopping card, inspect its dialog and follow the actual merchant link;
-  never guess a product URL or skip reading the dialog.
+- A browser action may return page content, an automatic current-page observation,
+  or only a snapshot file link.
+- If the browser action already returns "AUTO CURRENT PAGE OBSERVATION" with a
+  fresh Observation ID and snapshot content, use that observation directly for
+  the next decision. Do NOT call browser_snapshot again unless the returned
+  observation does not contain the information you need or the page changes again.
+- If the browser action returns only a snapshot file link and no current-page
+  observation, call browser_snapshot to read the resulting page or dialog before
+  choosing the next action.
+- After opening a shopping card, inspect its current page/dialog evidence and
+  follow the actual merchant link; never guess a product URL or skip reading it.
 - If a popup, cookie banner, ad overlay, or similar element blocks the requested task, dismiss or close it before continuing.
 - Do not click advertisements unless the user explicitly asks for them.
 - Handle browser dialogs when they prevent progress.

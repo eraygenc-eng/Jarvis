@@ -44,6 +44,9 @@ async def main():
                 print("Jarvis: Goodbye...")
                 break
 
+            # Start each user request with a fresh semantic browser focus
+            browser.reset_request_focus()
+
             # Start timing the request
             start_time = time.perf_counter()
 

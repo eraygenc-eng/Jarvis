@@ -19,6 +19,9 @@ class TimingCallback(BaseCallbackHandler):
         self.llm_error_count = 0
         self.llm_durations = []
 
+        # Number LLM calls inside the current user request
+        self.llm_call_index = 0
+
         # Store token usage
         self.input_tokens = 0
         self.output_tokens = 0
@@ -88,6 +91,98 @@ class TimingCallback(BaseCallbackHandler):
     ):
         # Count successful LLM calls
         self.llm_success_count += 1
+
+        self.llm_call_index += 1
+
+        tool_requests = []
+        response_preview = None
+
+        for batch in getattr(response, "generations", []) or []:
+            for generation in batch:
+                message = getattr(generation, "message", None)
+
+                if message is None:
+                    continue
+
+                tool_calls = getattr(
+                    message,
+                    "tool_calls",
+                    None,
+                ) or []
+
+                for call in tool_calls:
+                    if isinstance(call, dict):
+                        tool_name = call.get(
+                            "name",
+                            "unknown_tool",
+                        )
+
+                        tool_args = call.get(
+                            "args",
+                            {},
+                        )
+                    else:
+                        tool_name = getattr(
+                            call,
+                            "name",
+                            "unknown_tool",
+                        )
+
+                        tool_args = getattr(
+                            call,
+                            "args",
+                            {},
+                        )
+
+                    args_text = str(tool_args)
+
+                    if len(args_text) > 300:
+                        args_text = (
+                            args_text[:300]
+                            + "..."
+                        )
+
+                    tool_requests.append(
+                        f"{tool_name}({args_text})"
+                    )
+
+                content = getattr(
+                    message,
+                    "content",
+                    None,
+                )
+
+                if (
+                    response_preview is None
+                    and content
+                ):
+                    response_preview = str(content)
+
+                if tool_calls:
+                    break
+
+            if tool_requests:
+                break
+
+        if tool_requests:
+            print(
+                f"[LLMDebug] Call #{self.llm_call_index} "
+                f"requested: "
+                + ", ".join(tool_requests)
+            )
+        else:
+            preview = (
+                response_preview or ""
+            ).replace("\n", " ")
+
+            if len(preview) > 200:
+                preview = preview[:200] + "..."
+
+            print(
+                f"[LLMDebug] Call #{self.llm_call_index} "
+                f"requested no tool | "
+                f"response={preview!r}"
+            )
 
         # Calculate the LLM execution time
         start_time = self.llm_start_times.pop(run_id, None)
@@ -269,6 +364,7 @@ class TimingCallback(BaseCallbackHandler):
         self.llm_success_count = 0
         self.llm_error_count = 0
         self.llm_durations = []
+        self.llm_call_index = 0
 
         # Reset request-level token usage
         self.input_tokens = 0

@@ -13,6 +13,8 @@ from langchain.agents.middleware import wrap_model_call
 
 SNAPSHOT_TRIM_THRESHOLD = 4000
 
+AUTO_OBSERVATION_MARKER = "AUTO CURRENT PAGE OBSERVATION"
+
 # Start removing old completed tool groups only after history becomes
 # meaningfully large. Short interactions keep their full tool history.
 TOOL_GROUP_PRUNE_THRESHOLD = 8
@@ -33,10 +35,18 @@ def extract_snapshot_metadata(
 ) -> SnapshotMetadata | None:
     """Read trusted metadata from a browser_snapshot ToolMessage."""
 
-    if message.name != "browser_snapshot":
+    if not isinstance(message.content, str):
         return None
 
-    if not isinstance(message.content, str):
+    is_explicit_snapshot = (
+        message.name == "browser_snapshot"
+    )
+
+    is_auto_observation = (
+        AUTO_OBSERVATION_MARKER in message.content
+    )
+
+    if not is_explicit_snapshot and not is_auto_observation:
         return None
 
     observation_match = re.search(
@@ -72,6 +82,52 @@ def compact_snapshot_message(
         "This is archived evidence, not current browser evidence.\n"
         "Use research_read_observation if the archived page must be inspected again."
     )
+
+    return message.model_copy(
+        update={
+            "content": compact_content,
+        }
+    )
+
+
+def compact_auto_observation_message(
+    message: ToolMessage,
+    metadata: SnapshotMetadata,
+) -> ToolMessage:
+    """Compact only the embedded automatic observation."""
+
+    if not isinstance(message.content, str):
+        return message
+
+    marker_index = message.content.find(
+        AUTO_OBSERVATION_MARKER
+    )
+
+    if marker_index == -1:
+        return message
+
+    # Preserve the actual browser action result.
+    action_content = message.content[
+        :marker_index
+    ].rstrip()
+
+    compact_observation = (
+        "ARCHIVED AUTO BROWSER OBSERVATION\n"
+        f"Observation ID: {metadata.observation_id}\n"
+        f"Page URL: {metadata.page_url}\n"
+        "The old automatic page content was removed from model input.\n"
+        "This is archived evidence, not current browser evidence.\n"
+        "Use research_read_observation if it must be inspected again."
+    )
+
+    if action_content:
+        compact_content = (
+            action_content
+            + "\n\n"
+            + compact_observation
+        )
+    else:
+        compact_content = compact_observation
 
     return message.model_copy(
         update={
@@ -373,12 +429,20 @@ def compact_old_browser_snapshots(
         if stored_observation.page_url != metadata.page_url:
             continue
 
-        compacted_messages[index] = (
-            compact_snapshot_message(
-                message,
-                metadata,
+        if message.name == "browser_snapshot":
+            compacted_messages[index] = (
+                compact_snapshot_message(
+                    message,
+                    metadata,
+                )
             )
-        )
+        else:
+            compacted_messages[index] = (
+                compact_auto_observation_message(
+                    message,
+                    metadata,
+                )
+            )
 
     return compacted_messages
 

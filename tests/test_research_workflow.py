@@ -100,280 +100,834 @@ def snapshot_and_quote(category="product", price=6000, **overrides):
 class ResearchFixture:
     def __init__(self, category="product"):
         self.category = category
-        self.state = ComparisonState(query="Find the cheapest matching option", category=category,
-                                     planned_sources=["Discovery"])
-        self.result = ComparisonResult(title=SCOPES[category], source="Discovery",
-                                       price=4500, currency="TRY", seller="Example Provider",
-                                       offer_url="https://merchant.example/offer", url="https://discovery.example/item")
+        self.state = ComparisonState(
+            query="Find the cheapest matching option",
+            category=category,
+            planned_sources=["Discovery"]
+        )
+        self.result = ComparisonResult(
+            title=SCOPES[category],
+            source="Discovery",
+            price=4500,
+            currency="TRY",
+            seller="Example Provider",
+            offer_url="https://merchant.example/offer",
+            url="https://discovery.example/item"
+        )
         self.state.add_result(self.result)
         self.store = ObservationStore()
-        self.tools = {tool.name: tool for tool in create_research_tools(lambda: self.state, self.store)}
+        self.tools = {
+            tool.name: tool
+            for tool in create_research_tools(
+                lambda: self.state,
+                self.store
+            )
+        }
 
     def capture(self, price=6000, **overrides):
-        text, quote = snapshot_and_quote(self.category, price, **overrides)
-        observation = self.store.capture(self.result.offer_url, text)
-        return {"result_id": self.result.result_id, "observation_id": observation.observation_id, "quote": quote}
+        text, quote = snapshot_and_quote(
+            self.category,
+            price,
+            **overrides
+        )
+        observation = self.store.capture(
+            self.result.offer_url,
+            text
+        )
+        return {
+            "result_id": self.result.result_id,
+            "observation_id": observation.observation_id,
+            "quote": quote
+        }
 
     def verify(self, **overrides):
-        return self.tools["research_verify_result"].invoke(self.capture(**overrides))
+        return self.tools["research_verify_result"].invoke(
+            self.capture(**overrides)
+        )
 
     def finalize(self):
-        self.state.complete_source("Discovery", SourceStatus.COMPLETED)
-        return self.tools["research_finalize"].invoke({"result_id": self.result.result_id})
+        self.state.complete_source(
+            "Discovery",
+            SourceStatus.COMPLETED
+        )
+        return self.tools["research_finalize"].invoke(
+            {"result_id": self.result.result_id}
+        )
 
 
 class QuoteVerificationTests(unittest.TestCase):
+
     def test_price_change_replaces_discovery_and_preserves_history_in_every_category(self):
         for category in SCOPES:
             with self.subTest(category=category):
                 f = ResearchFixture(category)
                 self.assertIn("VERIFIED RESULT", f.verify())
-                self.assertEqual(get_public_total(f.result, strict=True), 6000)
-                self.assertEqual(f.result.price_history[0]["price"], 4500)
-                self.assertEqual(f.result.price_history[-1]["price"], 6000)
+                self.assertEqual(
+                    get_public_total(f.result, strict=True),
+                    6000
+                )
+                self.assertEqual(
+                    f.result.price_history[0]["price"],
+                    4500
+                )
+                self.assertEqual(
+                    f.result.price_history[-1]["price"],
+                    6000
+                )
 
     def test_old_discovery_price_cannot_replace_fresh_price(self):
         f = ResearchFixture()
         payload = f.capture()
         payload["quote"]["price"] = 4500
-        response = f.tools["research_verify_result"].invoke(payload)
+        response = f.tools[
+            "research_verify_result"
+        ].invoke(payload)
+
         self.assertIn("Observed amount is", response)
         self.assertFalse(f.result.verified)
 
     def test_missing_numeric_amount_is_rejected(self):
         f = ResearchFixture()
         payload = f.capture()
-        payload["quote"]["price_amount_texts"] = {"price": "4500.00"}
-        self.assertIn("does not occur", f.tools["research_verify_result"].invoke(payload))
+        payload["quote"]["price_amount_texts"] = {
+            "price": "4500.00"
+        }
+
+        self.assertIn(
+            "does not occur",
+            f.tools["research_verify_result"].invoke(payload)
+        )
 
     def test_price_outside_selected_offer_is_rejected(self):
         f = ResearchFixture()
         payload = f.capture()
-        current = f.store.get(payload["observation_id"])
-        page = '- generic [ref=page]:\n' + '\n'.join('  ' + line for line in current.page_text.splitlines())
-        page += '\n  - article [ref=other]:\n    - generic [ref=otherprice]: Price: 4500.00 TRY'
-        obs = f.store.capture(f.result.offer_url, page)
+
+        current = f.store.get(
+            payload["observation_id"]
+        )
+
+        page = (
+            '- generic [ref=page]:\n'
+            + '\n'.join(
+                '  ' + line
+                for line in current.page_text.splitlines()
+            )
+        )
+
+        page += (
+            '\n  - article [ref=other]:\n'
+            '    - generic [ref=otherprice]: '
+            'Price: 4500.00 TRY'
+        )
+
+        obs = f.store.capture(
+            f.result.offer_url,
+            page
+        )
+
         payload["observation_id"] = obs.observation_id
-        payload["quote"].update(price=4500, price_evidence='- generic [ref=otherprice]: Price: 4500.00 TRY',
-                                price_amount_texts={"price": "4500.00"})
-        self.assertIn("selected offer subtree", f.tools["research_verify_result"].invoke(payload))
+        payload["quote"].update(
+            price=4500,
+            price_evidence=(
+                '- generic [ref=otherprice]: '
+                'Price: 4500.00 TRY'
+            ),
+            price_amount_texts={"price": "4500.00"},
+        )
+
+        self.assertIn(
+            "selected offer subtree",
+            f.tools["research_verify_result"].invoke(payload)
+        )
 
     def test_linked_price_for_other_seller_cannot_verify_current_seller(self):
         f = ResearchFixture()
+
         f.result.offer_url += "?sellerid=one"
+
         text, quote = snapshot_and_quote()
-        text = text.replace('- generic [ref=price]: Price: 6000.00 TRY',
-                            '- link "6000.00 TRY" [ref=price]:\n    - /url: /offer?sellerid=two')
-        quote["price_evidence"] = '- link "6000.00 TRY" [ref=price]:'
-        obs = f.store.capture(f.result.offer_url, text)
-        response = f.tools["research_verify_result"].invoke(dict(result_id=f.result.result_id,
-                                                               observation_id=obs.observation_id, quote=quote))
-        self.assertIn("different offer", response)
-        self.assertFalse(f.result.verified)
+
+        text = text.replace(
+            '- generic [ref=price]: Price: 6000.00 TRY',
+            '- link "6000.00 TRY" [ref=price]:\n'
+            '    - /url: /offer?sellerid=two'
+        )
+
+        quote["price_evidence"] = (
+            '- link "6000.00 TRY" [ref=price]:'
+        )
+
+        obs = f.store.capture(
+            f.result.offer_url,
+            text
+        )
+
+        response = f.tools[
+            "research_verify_result"
+        ].invoke(
+            dict(
+                result_id=f.result.result_id,
+                observation_id=obs.observation_id,
+                quote=quote
+            )
+        )
+
+        self.assertIn(
+            "different offer",
+            response
+        )
+
+        self.assertFalse(
+            f.result.verified
+        )
 
     def test_changed_seller_is_a_different_offer(self):
         f = ResearchFixture()
         f.result.seller = "Another Provider"
-        self.assertIn("seller/provider changed", f.verify())
+
+        self.assertIn(
+            "seller/provider changed",
+            f.verify()
+        )
 
     def test_unit_prices_are_not_comparable_totals_for_any_category(self):
         for category in SCOPES:
             with self.subTest(category=category):
                 f = ResearchFixture(category)
-                self.assertIn("VERIFIED RESULT", f.verify(price_scope="unit", scope_evidence=None))
-                self.assertIsNone(get_public_total(f.result, strict=True))
-                self.assertIn("BLOCKED", f.finalize())
+
+                self.assertIn(
+                    "VERIFIED RESULT",
+                    f.verify(
+                        price_scope="unit",
+                        scope_evidence=None
+                    )
+                )
+
+                self.assertIsNone(
+                    get_public_total(
+                        f.result,
+                        strict=True
+                    )
+                )
+
+                self.assertIn(
+                    "BLOCKED",
+                    f.finalize()
+                )
 
     def test_unknown_fees_remain_unknown(self):
         f = ResearchFixture("hotel")
-        self.assertIn("VERIFIED RESULT", f.verify(fees_included=False, fees_evidence=None))
-        self.assertIsNone(get_public_total(f.result, strict=True))
+
+        self.assertIn(
+            "VERIFIED RESULT",
+            f.verify(
+                fees_included=False,
+                fees_evidence=None
+            )
+        )
+
+        self.assertIsNone(
+            get_public_total(
+                f.result,
+                strict=True
+            )
+        )
 
     def test_generic_mandatory_fees_work_for_every_category(self):
         for category in SCOPES:
             with self.subTest(category=category):
                 f = ResearchFixture(category)
-                response = f.verify(fees_included=False, mandatory_fees=120,
-                                    fees_evidence="Mandatory fees: 120.00 TRY", fee_amount_text="120.00")
-                self.assertIn("VERIFIED RESULT", response)
-                self.assertEqual(get_public_total(f.result, strict=True), 6120)
+
+                response = f.verify(
+                    fees_included=False,
+                    mandatory_fees=120,
+                    fees_evidence=(
+                        "Mandatory fees: 120.00 TRY"
+                    ),
+                    fee_amount_text="120.00"
+                )
+
+                self.assertIn(
+                    "VERIFIED RESULT",
+                    response
+                )
+
+                self.assertEqual(
+                    get_public_total(f.result, strict=True),
+                    6120
+                )
 
     def test_travel_does_not_use_fake_zero_shipping(self):
         f = ResearchFixture("flight")
-        self.assertIn("not shipping_cost", f.verify(fees_included=False, fees_evidence=None,
-                                                     shipping_cost=0, shipping_evidence="Free shipping"))
+
+        self.assertIn(
+            "not shipping_cost",
+            f.verify(
+                fees_included=False,
+                fees_evidence=None,
+                shipping_cost=0,
+                shipping_evidence="Free shipping"
+            )
+        )
 
     def test_condition_requires_evidence(self):
         f = ResearchFixture()
-        self.assertIn("Price condition evidence", f.verify(price_condition="Members only"))
+
+        self.assertIn(
+            "Price condition evidence",
+            f.verify(
+                price_condition="Members only"
+            )
+        )
 
     def test_expired_and_invalidated_observations_are_rejected(self):
         f = ResearchFixture()
+
         payload = f.capture()
-        obs = f.store.get(payload["observation_id"])
-        f.store._observations[obs.observation_id] = replace(obs, captured_at=datetime.now(timezone.utc) - timedelta(minutes=6))
-        self.assertIn("expired", f.tools["research_verify_result"].invoke(payload))
+        obs = f.store.get(
+            payload["observation_id"]
+        )
+
+        f.store._observations[
+            obs.observation_id
+        ] = replace(
+            obs,
+            captured_at=(
+                datetime.now(timezone.utc)
+                - timedelta(minutes=6)
+            )
+        )
+
+        self.assertIn(
+            "expired",
+            f.tools[
+                "research_verify_result"
+            ].invoke(payload)
+        )
+
         payload = f.capture()
         f.store.invalidate_current()
-        self.assertIn("no longer current", f.tools["research_verify_result"].invoke(payload))
+
+        self.assertIn(
+            "no longer current",
+            f.tools[
+                "research_verify_result"
+            ].invoke(payload)
+        )
 
     def test_failed_recheck_invalidates_previous_verification(self):
         f = ResearchFixture()
+
         f.verify()
+
         payload = f.capture()
         payload["quote"]["price"] = 4500
-        f.tools["research_verify_result"].invoke(payload)
-        self.assertFalse(f.result.verified)
-        self.assertEqual(f.result.verification_status, VerificationStatus.PENDING)
+
+        f.tools[
+            "research_verify_result"
+        ].invoke(payload)
+
+        self.assertFalse(
+            f.result.verified
+        )
+
+        self.assertEqual(
+            f.result.verification_status,
+            VerificationStatus.PENDING
+        )
 
     def test_final_page_requires_a_new_snapshot(self):
         f = ResearchFixture()
+
         payload = f.capture()
-        f.tools["research_verify_result"].invoke(payload)
-        self.assertIn("APPROVED", f.finalize())
-        self.assertIn("new browser_snapshot", f.tools["research_confirm_final_page"].invoke(payload))
-        self.assertFalse(f.state.is_ready_to_return())
-        self.assertIn("CONFIRMED", f.tools["research_confirm_final_page"].invoke(f.capture()))
-        self.assertTrue(f.state.is_ready_to_return())
+
+        f.tools[
+            "research_verify_result"
+        ].invoke(payload)
+
+        self.assertIn(
+            "APPROVED",
+            f.finalize()
+        )
+
+        self.assertIn(
+            "new browser_snapshot",
+            f.tools[
+                "research_confirm_final_page"
+            ].invoke(payload)
+        )
+
+        self.assertFalse(
+            f.state.is_ready_to_return()
+        )
+
+        self.assertIn(
+            "CONFIRMED",
+            f.tools[
+                "research_confirm_final_page"
+            ].invoke(f.capture())
+        )
+
+        self.assertTrue(
+            f.state.is_ready_to_return()
+        )
 
     def test_price_change_on_final_page_reopens_ranking(self):
         for category in SCOPES:
             with self.subTest(category=category):
                 f = ResearchFixture(category)
+
                 f.verify()
                 f.finalize()
-                response = f.tools["research_confirm_final_page"].invoke(f.capture(price=7000))
-                self.assertIn("FINAL PAGE CHANGED", response)
-                self.assertEqual(get_public_total(f.result, strict=True), 7000)
-                self.assertFalse(f.state.is_finalized())
+
+                response = f.tools[
+                    "research_confirm_final_page"
+                ].invoke(
+                    f.capture(price=7000)
+                )
+
+                self.assertIn(
+                    "FINAL PAGE CHANGED",
+                    response
+                )
+
+                self.assertEqual(
+                    get_public_total(
+                        f.result,
+                        strict=True
+                    ),
+                    7000
+                )
+
+                self.assertFalse(
+                    f.state.is_finalized()
+                )
 
 
-def priced_result(price, currency="TRY", **overrides):
-    values = dict(title="Matching offer", source="Discovery", price=price, currency=currency,
-                  verified=True, verification_status=VerificationStatus.VERIFIED,
-                  price_scope="total", fees_included=True)
+def priced_result(
+    price,
+    currency="TRY",
+    **overrides
+):
+    values = dict(
+        title="Matching offer",
+        source="Discovery",
+        price=price,
+        currency=currency,
+        verified=True,
+        verification_status=(
+            VerificationStatus.VERIFIED
+        ),
+        price_scope="total",
+        fees_included=True,
+    )
+
     values.update(overrides)
+
     return ComparisonResult(**values)
 
 
 class RankingAndCompletionTests(unittest.TestCase):
+
     def test_fresh_merchant_price_changes_winner_in_every_category(self):
         for category in SCOPES:
             with self.subTest(category=category):
                 f = ResearchFixture(category)
-                f.state.add_result(priced_result(5200))
+
+                f.state.add_result(
+                    priced_result(5200)
+                )
+
                 f.verify()
-                self.assertEqual(find_best_overall(f.state, verified_only=True).price, 5200)
+
+                self.assertEqual(
+                    find_best_overall(
+                        f.state,
+                        verified_only=True
+                    ).price,
+                    5200
+                )
 
     def test_mixed_currencies_are_grouped_not_compared(self):
         f = ResearchFixture()
         f.state.results.clear()
-        f.state.add_result(priced_result(1000, "USD"))
-        f.state.add_result(priced_result(2000, "TRY"))
-        self.assertIsNone(find_best_overall(f.state, verified_only=True))
-        report = f.tools["research_rankings"].invoke({"verified_only": True})
-        self.assertIn("Currency: USD", report)
-        self.assertIn("Currency: TRY", report)
-        self.assertIn("Overall public winner: None", report)
+
+        f.state.add_result(
+            priced_result(1000, "USD")
+        )
+
+        f.state.add_result(
+            priced_result(2000, "TRY")
+        )
+
+        self.assertIsNone(
+            find_best_overall(
+                f.state,
+                verified_only=True
+            )
+        )
+
+        report = f.tools[
+            "research_rankings"
+        ].invoke(
+            {"verified_only": True}
+        )
+
+        self.assertIn(
+            "Currency: USD",
+            report
+        )
+
+        self.assertIn(
+            "Currency: TRY",
+            report
+        )
+
+        self.assertIn(
+            "Overall public winner: None",
+            report
+        )
 
     def test_unknown_currency_cannot_create_winner(self):
-        state = ComparisonState(query="cheapest")
-        state.add_result(priced_result(1000, None))
-        self.assertIsNone(find_best_overall(state, verified_only=True))
-        self.assertEqual(normalize_currency("tl"), "TRY")
+        state = ComparisonState(
+            query="cheapest"
+        )
+
+        state.add_result(
+            priced_result(
+                1000,
+                None
+            )
+        )
+
+        self.assertIsNone(
+            find_best_overall(
+                state,
+                verified_only=True
+            )
+        )
+
+        self.assertEqual(
+            normalize_currency("tl"),
+            "TRY"
+        )
 
     def test_conditional_offer_is_not_automatically_eligible(self):
-        state = ComparisonState(query="cheapest")
-        state.add_result(priced_result(100))
-        state.add_result(priced_result(80, price_condition="Paid membership"))
-        self.assertEqual(find_best_overall(state, verified_only=True).price, 100)
-        self.assertEqual(find_best_conditional(state, verified_only=True).price, 80)
+        state = ComparisonState(
+            query="cheapest"
+        )
+
+        state.add_result(
+            priced_result(100)
+        )
+
+        state.add_result(
+            priced_result(
+                80,
+                price_condition="Paid membership"
+            )
+        )
+
+        self.assertEqual(
+            find_best_overall(
+                state,
+                verified_only=True
+            ).price,
+            100
+        )
+
+        self.assertEqual(
+            find_best_conditional(
+                state,
+                verified_only=True
+            ).price,
+            80
+        )
 
     def test_rankings_and_finalization_agree_on_unknown_costs(self):
         f = ResearchFixture()
         f.state.results.clear()
-        f.state.add_result(priced_result(100, fees_included=False))
-        f.state.add_result(priced_result(120))
-        f.state.complete_source("Discovery", SourceStatus.COMPLETED)
-        best = find_best_overall(f.state, verified_only=True)
-        self.assertEqual(best.price, 120)
-        self.assertIn("APPROVED", f.tools["research_finalize"].invoke({"result_id": best.result_id}))
+
+        f.state.add_result(
+            priced_result(
+                100,
+                fees_included=False
+            )
+        )
+
+        f.state.add_result(
+            priced_result(120)
+        )
+
+        f.state.complete_source(
+            "Discovery",
+            SourceStatus.COMPLETED
+        )
+
+        best = find_best_overall(
+            f.state,
+            verified_only=True
+        )
+
+        self.assertEqual(
+            best.price,
+            120
+        )
+
+        self.assertIn(
+            "APPROVED",
+            f.tools[
+                "research_finalize"
+            ].invoke(
+                {
+                    "result_id": (
+                        best.result_id
+                    )
+                }
+            )
+        )
 
     def test_blocked_cheaper_offer_does_not_prevent_source_completion(self):
         f = ResearchFixture()
-        f.result.verification_status = VerificationStatus.BLOCKED
-        f.state.add_result(priced_result(6000))
-        self.assertEqual(get_unverified_source_winners(f.state, "Discovery"), [])
-        f.state.start_source("Discovery")
-        observation = f.store.capture("https://discovery.example/search", "Desk lamp L2 offers")
-        f.tools["research_record_discovery_attempt"].invoke({
-            "source": "Discovery", "query": "Desk lamp L2", "observation_id": observation.observation_id,
-        })
-        self.assertIn("FINISHED", f.tools["research_complete_source"].invoke({
-            "source": "Discovery", "outcome": "completed", "coverage_summary": "One offer verified, other blocked.",
-        }))
+
+        f.result.verification_status = (
+            VerificationStatus.BLOCKED
+        )
+
+        f.state.add_result(
+            priced_result(6000)
+        )
+
+        self.assertEqual(
+            get_unverified_source_winners(
+                f.state,
+                "Discovery"
+            ),
+            []
+        )
+
+        f.state.start_source(
+            "Discovery"
+        )
+
+        observation = f.store.capture(
+            "https://discovery.example/search",
+            "Desk lamp L2 offers"
+        )
+
+        f.tools[
+            "research_record_discovery_attempt"
+        ].invoke(
+            {
+                "source": "Discovery",
+                "query": "Desk lamp L2",
+                "observation_id": (
+                    observation.observation_id
+                ),
+            }
+        )
+
+        self.assertIn(
+            "FINISHED",
+            f.tools[
+                "research_complete_source"
+            ].invoke(
+                {
+                    "source": "Discovery",
+                    "outcome": "completed",
+                    "coverage_summary": (
+                        "One offer verified, "
+                        "other blocked."
+                    ),
+                }
+            )
+        )
 
     def test_all_empty_sources_are_a_finished_research_outcome(self):
-        state = ComparisonState(query="cheapest", planned_sources=["A", "B"])
+        state = ComparisonState(
+            query="cheapest",
+            planned_sources=[
+                "A",
+                "B"
+            ]
+        )
+
         for source in state.planned_sources:
-            state.complete_source(source, SourceStatus.NO_RESULTS)
-        self.assertTrue(state.is_ready_to_return())
-        self.assertFalse(state.is_finalized())
+            state.complete_source(
+                source,
+                SourceStatus.NO_RESULTS
+            )
+
+        self.assertTrue(
+            state.is_ready_to_return()
+        )
+
+        self.assertFalse(
+            state.is_finalized()
+        )
 
     def test_unknown_costs_can_finish_with_an_explanation(self):
         f = ResearchFixture("hotel")
-        f.verify(fees_included=False, fees_evidence=None)
-        f.state.complete_source("Discovery", SourceStatus.COMPLETED)
-        response = f.tools["research_finish_without_winner"].invoke({})
-        self.assertIn("FINISHED WITHOUT WINNER", response)
-        self.assertTrue(f.state.is_ready_to_return())
-        self.assertFalse(f.state.final_page_verified)
+
+        f.verify(
+            fees_included=False,
+            fees_evidence=None
+        )
+
+        f.state.complete_source(
+            "Discovery",
+            SourceStatus.COMPLETED
+        )
+
+        response = f.tools[
+            "research_finish_without_winner"
+        ].invoke({})
+
+        self.assertIn(
+            "FINISHED WITHOUT WINNER",
+            response
+        )
+
+        self.assertTrue(
+            f.state.is_ready_to_return()
+        )
+
+        self.assertFalse(
+            f.state.final_page_verified
+        )
 
     def test_pending_offer_prevents_finishing_without_winner(self):
         f = ResearchFixture()
-        f.state.complete_source("Discovery", SourceStatus.BLOCKED)
-        self.assertFalse(f.state.is_ready_to_return())
-        self.assertIn("FINISH BLOCKED", f.tools["research_finish_without_winner"].invoke({}))
+
+        f.state.complete_source(
+            "Discovery",
+            SourceStatus.BLOCKED
+        )
+
+        self.assertFalse(
+            f.state.is_ready_to_return()
+        )
+
+        self.assertIn(
+            "FINISH BLOCKED",
+            f.tools[
+                "research_finish_without_winner"
+            ].invoke({})
+        )
 
     def test_new_offer_reopens_finished_research(self):
         f = ResearchFixture()
-        f.result.verification_status = VerificationStatus.BLOCKED
-        f.state.complete_source("Discovery", SourceStatus.BLOCKED)
-        self.assertTrue(f.state.is_ready_to_return())
-        f.state.add_result(ComparisonResult(title="New", source="Discovery"))
-        self.assertFalse(f.state.is_ready_to_return())
+
+        f.result.verification_status = (
+            VerificationStatus.BLOCKED
+        )
+
+        f.state.complete_source(
+            "Discovery",
+            SourceStatus.BLOCKED
+        )
+
+        self.assertTrue(
+            f.state.is_ready_to_return()
+        )
+
+        f.state.add_result(
+            ComparisonResult(
+                title="New",
+                source="Discovery"
+            )
+        )
+
+        self.assertFalse(
+            f.state.is_ready_to_return()
+        )
 
     def test_nan_and_infinity_are_rejected(self):
-        for value in (float("nan"), float("inf"), -1):
-            self.assertIsNotNone(validate_money_values(price=value))
-            with self.assertRaises(ValueError):
-                _, quote = snapshot_and_quote()
+        for value in (
+            float("nan"),
+            float("inf"),
+            -1,
+        ):
+            self.assertIsNotNone(
+                validate_money_values(
+                    price=value
+                )
+            )
+
+            with self.assertRaises(
+                ValueError
+            ):
+                _, quote = (
+                    snapshot_and_quote()
+                )
+
                 quote["price"] = value
-                OfferQuote.model_validate(quote)
+
+                OfferQuote.model_validate(
+                    quote
+                )
 
 
 class UrlIdentityTests(unittest.TestCase):
+
     def test_same_seller_is_not_same_product(self):
-        self.assertFalse(urls_match("https://x.example/a?sellerid=42", "https://x.example/b?sellerid=42"))
+        self.assertFalse(
+            urls_match(
+                "https://x.example/a?sellerid=42",
+                "https://x.example/b?sellerid=42"
+            )
+        )
 
     def test_missing_identity_parameter_is_not_a_match(self):
-        self.assertFalse(urls_match("https://x.example/a?sellerid=42", "https://x.example/a"))
+        self.assertFalse(
+            urls_match(
+                "https://x.example/a?sellerid=42",
+                "https://x.example/a"
+            )
+        )
 
     def test_changed_variant_or_booking_dates_are_not_a_match(self):
-        for field in ("renk", "variant", "checkin", "adults"):
-            self.assertFalse(urls_match(f"https://x.example/a?{field}=one", f"https://x.example/a?{field}=two"))
+        for field in (
+            "renk",
+            "variant",
+            "checkin",
+            "adults",
+        ):
+            self.assertFalse(
+                urls_match(
+                    f"https://x.example/a?{field}=one",
+                    f"https://x.example/a?{field}=two"
+                )
+            )
 
     def test_tracking_and_trailing_slash_are_ignored(self):
-        self.assertTrue(urls_match("https://www.x.example/a?sku=42&utm_source=ad", "https://x.example/a/?sku=42"))
+        self.assertTrue(
+            urls_match(
+                "https://www.x.example/a?"
+                "sku=42&utm_source=ad",
+                "https://x.example/a/?sku=42"
+            )
+        )
 
     def test_strong_product_identifier_allows_slug_change(self):
-        self.assertTrue(urls_match("https://x.example/a?sku=42", "https://x.example/b?sku=42"))
+        self.assertTrue(
+            urls_match(
+                "https://x.example/a?sku=42",
+                "https://x.example/b?sku=42"
+            )
+        )
 
     def test_relative_urls_are_not_exact_offer_urls(self):
-        self.assertFalse(urls_match("/a", "/a"))
+        self.assertFalse(
+            urls_match(
+                "/a",
+                "/a"
+            )
+        )
 
 
 class PlanningTests(unittest.TestCase):
+
     def test_research_wording_starts_structured_comparison(self):
         for prompt in (
             "Logitech mouse fiyatlarını araştır",
@@ -381,35 +935,83 @@ class PlanningTests(unittest.TestCase):
             "Research flight options to Berlin",
             "Araç kiralama seçeneklerini araştır",
         ):
-            with self.subTest(prompt=prompt):
-                self.assertEqual(classify_task(prompt), TaskType.COMPARISON)
+            with self.subTest(
+                prompt=prompt
+            ):
+                self.assertEqual(
+                    classify_task(prompt),
+                    TaskType.COMPARISON
+                )
 
     def test_general_research_has_a_nonempty_source_plan(self):
         self.assertEqual(
-            plan_sources("Research language courses", category=ResearchCategory.GENERAL),
+            plan_sources(
+                "Research language courses",
+                category=(
+                    ResearchCategory.GENERAL
+                )
+            ),
             ["Web Search"],
         )
 
 
-class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
+class BrowserEvidenceTests(
+    unittest.IsolatedAsyncioTestCase
+):
+
     async def test_browser_actions_invalidate_old_evidence_and_serialize(self):
         from core.tools.browser import BrowserManager
+
         browser = BrowserManager()
-        browser.observations.capture("https://x.example", "page")
+
+        browser.observations.capture(
+            "https://x.example",
+            "page"
+        )
+
         events = []
 
         async def handler(request):
-            events.append(("start", request.name))
-            self.assertIsNone(browser.observations.current_observation_id)
+            events.append(
+                ("start", request.name)
+            )
+
+            self.assertIsNone(
+                browser.observations.current_observation_id
+            )
+
             await asyncio.sleep(0)
-            events.append(("end", request.name))
+
+            events.append(
+                ("end", request.name)
+            )
+
             return "ok"
 
-        await asyncio.gather(*(
-            browser._track_browser_action(SimpleNamespace(name=name), handler)
-            for name in ("navigate", "click")
-        ))
-        self.assertEqual(events, [("start", "navigate"), ("end", "navigate"), ("start", "click"), ("end", "click")])
+        await asyncio.gather(
+            *(
+                browser._track_browser_action(
+                    SimpleNamespace(
+                        name=name
+                    ),
+                    handler
+                )
+                for name in (
+                    "navigate",
+                    "click"
+                )
+            )
+        )
+
+        self.assertEqual(
+            events,
+            [
+                ("start", "navigate"),
+                ("end", "navigate"),
+                ("start", "click"),
+                ("end", "click"),
+            ]
+        )
 
     def test_archived_observation_can_be_read_without_becoming_current(self):
         from core.security.policy import (
@@ -420,7 +1022,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         f = ResearchFixture()
 
         payload = f.capture()
-        observation_id = payload["observation_id"]
+        observation_id = (
+            payload["observation_id"]
+        )
 
         # Simulate moving away from the page.
         f.store.invalidate_current()
@@ -433,7 +1037,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             "research_read_observation"
         ].invoke(
             {
-                "observation_id": observation_id,
+                "observation_id": (
+                    observation_id
+                ),
                 "offer_ref": "offer",
             }
         )
@@ -442,21 +1048,26 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             "ARCHIVED BROWSER OBSERVATION",
             response,
         )
+
         self.assertIn(
             observation_id,
             response,
         )
+
         self.assertIn(
             "Price: 6000.00 TRY",
             response,
         )
 
-        # Reading archived evidence must not make it current again.
+        # Reading archived evidence must not
+        # make it current again.
         self.assertIsNone(
             f.store.current_observation_id
         )
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(
+            ValueError
+        ):
             f.store.require_current(
                 observation_id
             )
@@ -464,7 +1075,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         decision = evaluate_tool_call(
             "research_read_observation",
             {
-                "observation_id": observation_id,
+                "observation_id": (
+                    observation_id
+                ),
             },
         )
 
@@ -472,7 +1085,6 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             decision.action,
             SecurityAction.ALLOW,
         )
-
 
     async def test_snapshot_reuses_cache_when_page_did_not_change(self):
 
@@ -512,8 +1124,13 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             browser.observations.current_observation_id
         )
 
-        self.assertIsNotNone(first_observation_id)
-        self.assertFalse(browser._page_changed)
+        self.assertIsNotNone(
+            first_observation_id
+        )
+
+        self.assertFalse(
+            browser._page_changed
+        )
 
         # Second call should reuse the stored snapshot
         second_result = await browser.capture_snapshot(
@@ -530,7 +1147,8 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
 
-        # Both results must use the same stored observation
+        # Both results must use the same
+        # stored observation
         self.assertEqual(
             first_observation_id,
             second_observation_id,
@@ -546,8 +1164,7 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             second_result,
         )
 
-
-    async def test_page_changing_action_invalidates_snapshot_cache(self):
+    async def test_page_changing_action_refreshes_snapshot_automatically(self):
 
         browser = BrowserManager()
 
@@ -575,7 +1192,8 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        # First snapshot reads the browser
+        # First explicit snapshot reads the browser and establishes
+        # the active semantic focus.
         await browser.capture_snapshot(
             focus="iPhone 18 Pro",
         )
@@ -584,15 +1202,36 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             browser.observations.current_observation_id
         )
 
-        self.assertFalse(browser._page_changed)
+        self.assertIsNotNone(
+            first_observation_id
+        )
 
-        # Simulate a browser action that may change the page
+        self.assertFalse(
+            browser._page_changed
+        )
+
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            1,
+        )
+
+        # Simulate a successful page-changing click.
         request = SimpleNamespace(
             name="browser_click",
             args={},
         )
 
         async def handler(request):
+            # The old observation must already be invalidated
+            # before the real browser action runs.
+            self.assertIsNone(
+                browser.observations.current_observation_id
+            )
+
+            self.assertTrue(
+                browser._page_changed
+            )
+
             return CallToolResult(
                 content=[
                     TextContent(
@@ -603,43 +1242,80 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 isError=False,
             )
 
-        await browser._track_browser_action(
+        response = await browser._track_browser_action(
             request,
             handler,
         )
 
-        # The old snapshot must now be invalid
-        self.assertTrue(browser._page_changed)
-
-        self.assertIsNone(
-            browser.observations.current_observation_id
-        )
-
-        # Next snapshot must read the browser again
-        await browser.capture_snapshot(
-            focus="iPhone 18 Pro",
+        # The click must trigger one fresh automatic snapshot.
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            2,
         )
 
         second_observation_id = (
             browser.observations.current_observation_id
         )
 
-        # MCP snapshot should now have been called twice
-        self.assertEqual(
-            browser.session.call_tool.await_count,
-            2,
+        # A fresh observation must replace
+        # the invalidated one.
+        self.assertIsNotNone(
+            second_observation_id
         )
 
-        # A new observation must be created
         self.assertNotEqual(
             first_observation_id,
             second_observation_id,
         )
 
-        self.assertFalse(browser._page_changed)
+        # The fresh observation now represents the current page,
+        # so the page is no longer dirty.
+        self.assertFalse(
+            browser._page_changed
+        )
 
+        # The tool response must expose the fresh observation
+        # directly to the model.
+        response_text = "\n".join(
+            block.text
+            for block in response.content
+            if block.type == "text"
+        )
+
+        self.assertIn(
+            "AUTO CURRENT PAGE OBSERVATION",
+            response_text,
+        )
+
+        self.assertIn(
+            second_observation_id,
+            response_text,
+        )
+
+        # Asking for another snapshot immediately afterwards
+        # must reuse the fresh automatic observation instead
+        # of reading Playwright a third time.
+        result = await browser.capture_snapshot(
+            focus="iPhone 18 Pro",
+        )
+
+        self.assertEqual(
+            browser.session.call_tool.await_count,
+            2,
+        )
+
+        self.assertEqual(
+            browser.observations.current_observation_id,
+            second_observation_id,
+        )
+
+        self.assertIn(
+            second_observation_id,
+            result,
+        )
 
     async def test_browser_find_does_not_invalidate_snapshot_cache(self):
+
         browser = BrowserManager()
 
         snapshot_text = (
@@ -675,7 +1351,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             browser.observations.current_observation_id
         )
 
-        self.assertFalse(browser._page_changed)
+        self.assertFalse(
+            browser._page_changed
+        )
 
         # browser_find only reads the current page
         request = SimpleNamespace(
@@ -688,7 +1366,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 content=[
                     TextContent(
                         type="text",
-                        text='Found 1 matches for "Price"',
+                        text=(
+                            'Found 1 matches for "Price"'
+                        ),
                     )
                 ],
                 isError=False,
@@ -700,7 +1380,9 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         # Cache must still be valid
-        self.assertFalse(browser._page_changed)
+        self.assertFalse(
+            browser._page_changed
+        )
 
         self.assertEqual(
             browser.observations.current_observation_id,
@@ -712,7 +1394,8 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
             focus="Price",
         )
 
-        # Real MCP snapshot must still have run only once
+        # Real MCP snapshot must still
+        # have run only once
         self.assertEqual(
             browser.session.call_tool.await_count,
             1,
@@ -724,60 +1407,195 @@ class BrowserEvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class AgentReportTests(unittest.IsolatedAsyncioTestCase):
+class AgentReportTests(
+    unittest.IsolatedAsyncioTestCase
+):
+
     def test_progress_signature_tracks_all_planned_sources_and_offer_changes(self):
         from core.agent import JarvisAgent
+
         f = ResearchFixture()
-        agent = object.__new__(JarvisAgent)
-        agent.current_comparison_state = f.state
-        before = agent._research_progress_signature()
-        f.state.start_source("Discovery")
-        after_source_start = agent._research_progress_signature()
-        self.assertNotEqual(before, after_source_start)
+
+        agent = object.__new__(
+            JarvisAgent
+        )
+
+        agent.current_comparison_state = (
+            f.state
+        )
+
+        before = (
+            agent._research_progress_signature()
+        )
+
+        f.state.start_source(
+            "Discovery"
+        )
+
+        after_source_start = (
+            agent._research_progress_signature()
+        )
+
+        self.assertNotEqual(
+            before,
+            after_source_start
+        )
+
         f.result.price = 6100
-        self.assertNotEqual(after_source_start, agent._research_progress_signature())
+
+        self.assertNotEqual(
+            after_source_start,
+            agent._research_progress_signature()
+        )
 
     async def test_report_uses_unbound_model_and_records_every_offer_and_price_change(self):
         from core.agent import JarvisAgent
         from langchain_core.messages import AIMessage
+
         f = ResearchFixture("hotel")
+
         f.verify()
-        f.state.planned_sources.append("Blocked source")
-        from core.research.comparison_state import SourceResearchState
-        f.state.source_states["Blocked source"] = SourceResearchState(source="Blocked source", status=SourceStatus.BLOCKED)
-        report_model = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content="Comparison report")))
-        agent = object.__new__(JarvisAgent)
-        agent.current_comparison_state = f.state
-        agent.observation_store = f.store
-        agent.llm = SimpleNamespace(get_model=lambda: report_model, get_fallback_model=lambda: report_model)
-        agent.agent = SimpleNamespace(ainvoke=AsyncMock(), aupdate_state=AsyncMock())
-        answer = await agent._generate_research_report("Compare hotel prices", {})
-        self.assertTrue(answer.startswith("Comparison report"))
-        self.assertIn("https://merchant.example/offer", answer)
-        self.assertIn("Blocked source", answer)
+
+        f.state.planned_sources.append(
+            "Blocked source"
+        )
+
+        from core.research.comparison_state import (
+            SourceResearchState
+        )
+
+        f.state.source_states[
+            "Blocked source"
+        ] = SourceResearchState(
+            source="Blocked source",
+            status=SourceStatus.BLOCKED
+        )
+
+        report_model = SimpleNamespace(
+            ainvoke=AsyncMock(
+                return_value=AIMessage(
+                    content="Comparison report"
+                )
+            )
+        )
+
+        agent = object.__new__(
+            JarvisAgent
+        )
+
+        agent.current_comparison_state = (
+            f.state
+        )
+
+        agent.observation_store = (
+            f.store
+        )
+
+        agent.llm = SimpleNamespace(
+            get_model=lambda: report_model,
+            get_fallback_model=lambda: (
+                report_model
+            )
+        )
+
+        agent.agent = SimpleNamespace(
+            ainvoke=AsyncMock(),
+            aupdate_state=AsyncMock()
+        )
+
+        answer = (
+            await agent._generate_research_report(
+                "Compare hotel prices",
+                {}
+            )
+        )
+
+        self.assertTrue(
+            answer.startswith(
+                "Comparison report"
+            )
+        )
+
+        self.assertIn(
+            "https://merchant.example/offer",
+            answer
+        )
+
+        self.assertIn(
+            "Blocked source",
+            answer
+        )
+
         agent.agent.ainvoke.assert_not_called()
+
         agent.agent.aupdate_state.assert_awaited_once()
-        messages = report_model.ainvoke.call_args.args[0]
-        for expected in ("Discovery", "Blocked source", "4500", "6000", "price_history"):
-            self.assertIn(expected, messages[1]["content"])
+
+        messages = (
+            report_model.ainvoke.call_args.args[0]
+        )
+
+        for expected in (
+            "Discovery",
+            "Blocked source",
+            "4500",
+            "6000",
+            "price_history",
+        ):
+            self.assertIn(
+                expected,
+                messages[1]["content"]
+            )
 
     async def test_browser_navigation_after_confirmation_clears_final_page_claim(self):
         from core.agent import JarvisAgent
+
         f = ResearchFixture()
+
         f.verify()
         f.finalize()
-        f.tools["research_confirm_final_page"].invoke(f.capture())
-        self.assertTrue(f.state.final_page_verified)
-        agent = object.__new__(JarvisAgent)
-        agent.current_comparison_state = f.state
-        agent.observation_store = f.store
+
+        f.tools[
+            "research_confirm_final_page"
+        ].invoke(
+            f.capture()
+        )
+
+        self.assertTrue(
+            f.state.final_page_verified
+        )
+
+        agent = object.__new__(
+            JarvisAgent
+        )
+
+        agent.current_comparison_state = (
+            f.state
+        )
+
+        agent.observation_store = (
+            f.store
+        )
+
         f.store.invalidate_current()
-        context = agent._build_final_research_context()
-        self.assertFalse(f.state.final_page_verified)
-        self.assertIn("FINAL PAGE VERIFIED: False", context)
+
+        context = (
+            agent._build_final_research_context()
+        )
+
+        self.assertFalse(
+            f.state.final_page_verified
+        )
+
+        self.assertIn(
+            "FINAL PAGE VERIFIED: False",
+            context
+        )
 
 
-class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
+class CompletionGuardTests(
+    unittest.IsolatedAsyncioTestCase
+):
+
     async def test_ready_research_skips_model_but_report_and_normal_chat_still_use_it(self):
         from core.agent import JarvisAgent
         from core.context import RequestContext
@@ -789,10 +1607,18 @@ class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         response = f.tools[
             "research_confirm_final_page"
-        ].invoke(f.capture())
+        ].invoke(
+            f.capture()
+        )
 
-        self.assertIn("CONFIRMED", response)
-        self.assertTrue(f.state.is_ready_to_return())
+        self.assertIn(
+            "CONFIRMED",
+            response
+        )
+
+        self.assertTrue(
+            f.state.is_ready_to_return()
+        )
 
         model = CountingChatModel()
 
@@ -806,21 +1632,28 @@ class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
             observation_store=f.store,
         )
 
-        agent.current_comparison_state = f.state
+        agent.current_comparison_state = (
+            f.state
+        )
 
         config = {
             "configurable": {
-                "thread_id": "completion-guard-test",
+                "thread_id": (
+                    "completion-guard-test"
+                ),
             }
         }
 
-        # Ready research must end before another research model call.
+        # Ready research must end before
+        # another research model call.
         await agent.agent.ainvoke(
             {
                 "messages": [
                     {
                         "role": "user",
-                        "content": "Compare prices",
+                        "content": (
+                            "Compare prices"
+                        ),
                     }
                 ]
             },
@@ -831,19 +1664,38 @@ class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertEqual(model.call_count, 0)
-
-        # Final report must still use the model exactly once.
-        report = await agent._generate_research_report(
-            "Compare prices",
-            config,
+        self.assertEqual(
+            model.call_count,
+            0
         )
 
-        self.assertTrue(report.startswith("model response"))
-        self.assertIn("https://merchant.example/offer", report)
-        self.assertEqual(model.call_count, 1)
+        # Final report must still use the
+        # model exactly once.
+        report = (
+            await agent._generate_research_report(
+                "Compare prices",
+                config,
+            )
+        )
 
-        # A later normal chat request must not be blocked.
+        self.assertTrue(
+            report.startswith(
+                "model response"
+            )
+        )
+
+        self.assertIn(
+            "https://merchant.example/offer",
+            report
+        )
+
+        self.assertEqual(
+            model.call_count,
+            1
+        )
+
+        # A later normal chat request
+        # must not be blocked.
         await agent.agent.ainvoke(
             {
                 "messages": [
@@ -860,7 +1712,10 @@ class CompletionGuardTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertEqual(model.call_count, 2)
+        self.assertEqual(
+            model.call_count,
+            2
+        )
 
 
 if __name__ == "__main__":
