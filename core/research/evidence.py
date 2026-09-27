@@ -295,10 +295,42 @@ def get_focused_snapshot(
 
         ignored_terms.update(source_terms)
 
+    # Ignore inflected task words as well.
+    # Example:
+    # "ürünleri", "fiyatları", "satıcıları"
+    # should not become part of the product identity.
+    ignored_prefixes = {
+        "fiyat",
+        "ürün",
+        "urun",
+        "satıcı",
+        "satici",
+        "kargo",
+        "garanti",
+        "teklif",
+        "sonuç",
+        "sonuc",
+        "ilan",
+        "liste",
+        "arama",
+    }
+
+    def is_identity_term(term: str) -> bool:
+        if term in ignored_terms:
+            return False
+
+        if any(
+            term.startswith(prefix)
+            for prefix in ignored_prefixes
+        ):
+            return False
+
+        return True
+
     identity_terms = [
         term
         for term in focus_terms
-        if term not in ignored_terms
+        if is_identity_term(term)
     ]
 
     if not identity_terms:

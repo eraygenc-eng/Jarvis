@@ -379,10 +379,9 @@ class BrowserManager:
         page_url = observation.page_url
         page_text = observation.page_text
 
-        model_page_text = page_text
-        snapshot_mode = "full"
-
-        # Create a smaller model-facing view when focus is provided
+        # Full snapshots stay stored internally as evidence.
+        # When a semantic focus exists, never fall back to sending
+        # the complete page snapshot to the model.
         if focus:
             focused_snapshot = get_focused_snapshot(
                 page_text,
@@ -395,9 +394,26 @@ class BrowserManager:
                 f"{len(focused_snapshot):,} chars"
             )
 
+            snapshot_mode = "focused"
+
             if focused_snapshot.strip():
                 model_page_text = focused_snapshot
-                snapshot_mode = "focused"
+
+            else:
+                model_page_text = (
+                    "FOCUSED BROWSER SNAPSHOT\n"
+                    f"Focus: {focus}\n\n"
+                    "No sufficiently relevant page region was found "
+                    "for this focus.\n"
+                    "The complete snapshot remains stored internally "
+                    "as evidence and was not sent to the model.\n"
+                    "Use browser_find with a more specific product name, "
+                    "model, price, seller, or distinctive phrase if needed."
+                )
+
+        else:
+            model_page_text = page_text
+            snapshot_mode = "full"
 
         print(
             "[BrowserSnapshot] "
