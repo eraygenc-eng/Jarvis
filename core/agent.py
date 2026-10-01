@@ -38,11 +38,18 @@ from core.research.research_tools import (
 
 from core.research.evidence import ObservationStore
 
-from core.browser_context import create_browser_context_middleware
+
+from core.browser_action_policy import (
+    current_observation_is_visible,
+    filter_browser_action_tools,
+)
 
 from core.research.progress_middleware import (
     create_research_progress_middleware,
 )
+
+from core.browser_context import create_browser_context_middleware
+
 
 
 from core.research.ranking import (
@@ -199,6 +206,44 @@ class JarvisAgent:
             return await handler(request)
 
 
+        # Change the model request before the LLM runs
+        @wrap_model_call
+        async def browser_action_tool_filter(request, handler):
+            # Check if the current browser observation is already visible
+            observation_visible = current_observation_is_visible(
+                request.messages,
+                self.observation_store
+            )
+
+            # Hide browser actions that are not needed right now
+            filtered_tools = filter_browser_action_tools(
+                request.tools,
+                current_observation_visible = observation_visible
+            )
+
+        
+            # DEBUGGING
+            # Check if snapshot is available after filtering
+            snapshot_available = any(
+                getattr(tool, "name", None) == "browser_snapshot"
+                for tool in filtered_tools
+            )
+
+            print(
+                "[BrowserActionPolicy] "
+                f"observation_visible={observation_visible} "
+                f"snapshot_available={snapshot_available}"
+            )
+
+            # Use the filtered tools
+            request = request.override(
+                tools = filtered_tools
+            )
+
+            return await handler(request)
+
+
+        # Check if the model call is still needed
         @before_model(can_jump_to=["end"])
         def research_completion_guard(state, runtime):
             context = runtime.context
@@ -306,6 +351,7 @@ class JarvisAgent:
                 browser_context_middleware,
                 research_progress_middleware,
                 research_tool_filter,
+                browser_action_tool_filter,
                 ModelFallbackMiddleware(
                     self.llm.get_fallback_model()
                 ),

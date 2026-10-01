@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from core.browser_context import (
     compact_old_browser_snapshots,
     create_browser_context_middleware,
+    extract_snapshot_metadata,
     get_recent_tool_group_indices,
     prune_old_completed_tool_groups,
 )
@@ -26,6 +27,8 @@ from langchain_core.outputs import (
     ChatGeneration,
     ChatResult,
 )
+
+from core.browser_action_policy import current_observation_is_visible
 
 
 class CapturingChatModel(BaseChatModel):
@@ -135,6 +138,41 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
                     "type": "tool_call",
                 }
             ],
+        )
+
+    def test_extract_snapshot_metadata_reads_structured_auto_observation(self):
+        # Simulate structured browser tool output.
+        message = ToolMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "Clicked element.\n\n"
+                        "AUTO CURRENT PAGE OBSERVATION\n"
+                        "Observation ID: obs-123\n"
+                        "- Page URL: https://example.com/product\n"
+                    ),
+                }
+            ],
+            tool_call_id="call-structured",
+            name="browser_click",
+        )
+
+        # Read metadata from the structured content.
+        metadata = extract_snapshot_metadata(message)
+
+        # The observation must be detected.
+        self.assertIsNotNone(metadata)
+
+        # Check the extracted values.
+        self.assertEqual(
+            metadata.observation_id,
+            "obs-123",
+        )
+
+        self.assertEqual(
+            metadata.page_url,
+            "https://example.com/product",
         )
 
     def test_old_snapshot_is_compacted_but_recent_groups_are_preserved(self):
@@ -380,6 +418,40 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             "CURRENT AUTO OBSERVATION DATA",
             compacted[1].content,
         )
+
+    def test_policy_sees_structured_current_observation(self):
+        store = ObservationStore()
+
+        # Create the current browser observation.
+        observation = store.capture(
+            "https://example.com/product",
+            "PRODUCT PAGE DATA",
+        )
+
+        # Simulate structured browser tool output.
+        message = ToolMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "Clicked element.\n\n"
+                        "AUTO CURRENT PAGE OBSERVATION\n"
+                        f"Observation ID: {observation.observation_id}\n"
+                        "- Page URL: https://example.com/product\n"
+                    ),
+                }
+            ],
+            tool_call_id="call-policy",
+            name="browser_click",
+        )
+
+        # The policy should see the current observation.
+        visible = current_observation_is_visible(
+            [message],
+            store,
+        )
+
+        self.assertTrue(visible)
 
     async def test_middleware_compacts_only_model_request(self):
         store = ObservationStore()

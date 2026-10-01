@@ -30,12 +30,49 @@ class SnapshotMetadata:
     page_url: str
 
 
+def get_tool_message_text(message: ToolMessage) -> str:
+    """Return readable text from a ToolMessage."""
+
+    content = message.content
+
+    # Return normal text directly.
+    if isinstance(content, str):
+        return content
+
+    # Read text from structured content.
+    if isinstance(content, list):
+        text_parts = []
+
+        for item in content:
+            # Some list items may already be strings.
+            if isinstance(item, str):
+                text_parts.append(item)
+                continue
+
+            # Some items may contain a text field.
+            if isinstance(item, dict):
+                text = item.get("text")
+
+                # Add only valid text
+                if isinstance(text, str):
+                    text_parts.append(text)
+
+        # Combine all parts
+        return "\n".join(text_parts)
+
+    # Unknown content type
+    return ""
+
+
 def extract_snapshot_metadata(
     message: ToolMessage,
 ) -> SnapshotMetadata | None:
     """Read trusted metadata from a browser_snapshot ToolMessage."""
 
-    if not isinstance(message.content, str):
+    content = get_tool_message_text(message)
+
+    # Stop if there is no readable text
+    if not content:
         return None
 
     is_explicit_snapshot = (
@@ -43,7 +80,7 @@ def extract_snapshot_metadata(
     )
 
     is_auto_observation = (
-        AUTO_OBSERVATION_MARKER in message.content
+        AUTO_OBSERVATION_MARKER in content
     )
 
     if not is_explicit_snapshot and not is_auto_observation:
@@ -51,12 +88,12 @@ def extract_snapshot_metadata(
 
     observation_match = re.search(
         r"(?m)^Observation ID:\s*(\S+)\s*$",
-        message.content,
+        content,
     )
 
     url_match = re.search(
         r"(?m)^- Page URL:\s*(https?://[^\s]+)\s*$",
-        message.content,
+        content,
     )
 
     if observation_match is None or url_match is None:
