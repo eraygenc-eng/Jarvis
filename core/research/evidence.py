@@ -171,6 +171,141 @@ def _find_parent_ref(
     return None
 
 
+def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_controls: int = 20) -> str:
+    """Build a small snapshot with interactive controls."""
+
+    # Keep controls that can be used for browser actions
+    interactive_roles = {
+        "textbox",
+        "searchbox",
+        "combobox",
+        "button",
+        "checkbox",
+        "radio",
+        "option",
+        "spinbutton",
+        "switch",
+        "gridcell",
+    }
+
+    lines = page_text.splitlines()
+
+    # Read the role from each snapshot line
+    role_pattern = re.compile(
+        r"^\s*-\s+([a-zA-Z][\w-]*)\b",
+        re.IGNORECASE,
+    )
+
+    controls: list[tuple[int, str]] = []
+
+    for index, line in enumerate(lines):
+        role_match = role_pattern.search(line)
+
+        if role_match is None:
+            continue
+
+        role = role_match.group(1).casefold()
+
+        # Skip non-interactive roles
+        if role not in interactive_roles:
+            continue
+
+        ref = _extract_ref_from_line(line)
+
+        # Skip controls without a ref
+        if ref is None:
+            continue
+
+        controls.append((index, ref))
+
+    if not controls:
+        return ""
+
+    blocks: list[str] = []
+    used_refs: set[str] = set()
+    total_chars = 0
+
+    for index, ref in controls[:max_controls]:
+        # Do not add the same ref twice
+        if ref in used_refs:
+            continue
+
+
+        try:
+            # Read the control and its child nodes
+            block = get_snapshot_subtree(
+                page_text,
+                ref
+            )
+
+        except ValueError:
+            # Use only the current line if subtree reading fails
+            block = lines[index]
+
+        # Keep nearby text for labels
+        context_start = max(
+            0,
+            index - 2,
+        )
+
+        context_lines: list[str] = []
+
+        for context_line in lines[context_start:index]:
+            context_role_match = role_pattern.search(
+                context_line
+            )
+
+            if context_role_match is not None:
+                context_role = (
+                    context_role_match
+                    .group(1)
+                    .casefold()
+                )
+
+                # Do not add another control as context
+                if context_role in interactive_roles:
+                    continue
+
+            context_lines.append(context_line)
+
+        nearby_context = "\n".join(
+            context_lines
+        ).strip()
+
+        if nearby_context:
+            block = (
+                f"{nearby_context}\n"
+                f"{block}"
+            )
+
+        # Keep one control from becoming too large
+        if len(block) > 3000:
+            block = (
+                block[:3000].rstrip()
+                + "\n..."
+            )
+
+        # Stop before the final snapshot becomes too large
+        if(total_chars and total_chars + len(block) > max_chars):
+            break
+
+        blocks.append(block)
+        used_refs.add(ref)
+        total_chars += len(block)
+
+        # Stop if no blocks could be created
+    if not blocks:
+        return ""
+
+    return (
+        "INTERACTIVE BROWSER SNAPSHOT\n"
+        "Only interactive controls and nearby context are shown here. "
+        "The complete snapshot remains stored as evidence.\n\n"
+        + "\n\n---\n\n".join(blocks)
+    )
+
+
+
 
 def get_focused_snapshot(
     page_text: str,
