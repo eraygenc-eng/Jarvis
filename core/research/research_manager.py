@@ -1,4 +1,6 @@
 import re
+import json
+
 from dataclasses import dataclass
 
 from core.llm.base import BaseLLM
@@ -188,6 +190,58 @@ Return only the category name.
         return ProductType.GENERAL
 
 
+async def extract_flight_criteria_semantically(prompt: str, llm: BaseLLM, config: dict | None = None) -> dict:
+    extraction_prompt = f"""
+Extract the flight search criteria from the request below.
+
+Return ONLY valid JSON with exactly these fields:
+
+{{
+    "origin": string or null,
+    "destination": string or null,
+    "departure_date": string or null,
+    "return_date": string or null,
+    "trip_type": "one_way" or "round_trip",
+    "passengers": integer
+}}
+
+Rules:
+- Do not invent cities or dates.
+- Keep the requested origin and destination.
+- Keep dates as written by the user.
+- If there is no return date, use null.
+- If there is no return date, trip_type must be "one_way".
+- If there is a return date, trip_type must be "round_trip".
+- If passenger count is not specified, use 1.
+- Do not include explanations.
+- Do not use Markdown code fences.
+
+Request:
+{prompt}
+"""
+
+    response = await llm.get_model().ainvoke(
+        extraction_prompt,
+        config=config
+    )
+
+    response_text = extract_response_text(response.content).strip()
+
+    try:
+        criteria = json.loads(response_text)
+
+    except (json.JSONDecodeError, TypeError):
+        # Keep the original request when structured extraction fails.
+        return{
+            "raw_request": prompt.strip()
+        }
+
+    # Always keep the original request for reference.
+    criteria["raw_request"] = prompt.strip()
+
+    return criteria
+
+
 
 async def create_comparison_state(
     prompt: str,
@@ -210,6 +264,9 @@ async def create_comparison_state(
     product_type = None
     target_product = None
 
+    # Category-specific structured search criteria
+    criteria = {}
+
     if category == ResearchCategory.PRODUCT:
         # Extract a clean product identity once for the whole research.
         target_product = await extract_target_product_semantically(
@@ -228,6 +285,13 @@ async def create_comparison_state(
                 llm,
                 config=config,
             )
+
+    if category == ResearchCategory.FLIGHT:
+        criteria = await extract_flight_criteria_semantically(
+            prompt,
+            llm,
+            config=config
+        )
 
     # Use a separate prompt when resolving source clarification
     planning_prompt = source_prompt or prompt
@@ -260,7 +324,7 @@ async def create_comparison_state(
         criteria=(
             product_criteria(prompt)
             if category == ResearchCategory.PRODUCT
-            else {}
+            else criteria
         ),
         planned_sources=source_selection.sources,
         requires_staging=requires_staging,

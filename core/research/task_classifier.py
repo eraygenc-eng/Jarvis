@@ -49,6 +49,8 @@ TURKISH_SUFFIXES = [
     "de",
     "dan",
     "den",
+    "tan",
+    "ten",
 
     # Common plural combinations
     "lari",
@@ -158,6 +160,19 @@ RESEARCH_KEYWORDS = [
     "look for options",
 ]
 
+FLIGHT_SEARCH_KEYWORDS = [
+    # Turkish flight search requests
+    "ucak bileti bul",
+    "ucus bul",
+    "ucus ara",
+
+    # English flight search requests
+    "find a flight",
+    "find flight",
+    "search flights",
+    "search for a flight",
+]
+
 ACTION_KEYWORDS = [
     # Turkish action phrases
     "satın al",
@@ -186,9 +201,13 @@ def classify_task(prompt: str) -> TaskType:
         if contains_keyword(prompt, keyword):
             return TaskType.COMPARISON
 
-    # A request to research options needs the structured, multi-source workflow
-    # even when the user does not literally say "compare" or "cheapest".
+    # A request to research options needs the structured workflow
     for keyword in RESEARCH_KEYWORDS:
+        if contains_keyword(prompt, keyword):
+            return TaskType.COMPARISON
+
+    # Flight searches need the structured research workflow.
+    for keyword in FLIGHT_SEARCH_KEYWORDS:
         if contains_keyword(prompt, keyword):
             return TaskType.COMPARISON
 

@@ -97,6 +97,20 @@ For discovery use the visible title, price, currency and URL. Leave SKU, seller,
 shipping and totals empty when they are not explicitly established; they are
 optional. Do not turn a marketplace name into a seller or guess extra identifiers.
 For direct sources, that observation must be on the source's own website.
+
+FLIGHT RESULT DETAILS
+
+- For FLIGHT research, every research_add_result call must include details with:
+  origin, destination, departure_date, airline, departure_time, arrival_time.
+- Use the route and date from the actual visible flight result.
+- origin and destination must match the user's requested route.
+- Do not invent missing flight details.
+- If a required flight field is not visible yet, inspect the page further before
+  storing the result.
+- Put flight_number in details when it is visible.
+- For round trips, also preserve return_date when visible.
+- Preserve cabin, baggage and passenger information when the page explicitly shows it.
+
 For blocked sources/offers provide observation_id and copied observed_evidence
 from an actual browser error or access/availability failure. A quote-format error
 is NOT a site blocker. Correct the refs or leave research partial.

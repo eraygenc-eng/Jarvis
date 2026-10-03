@@ -110,6 +110,81 @@ def create_research_tools(
             "or continue the source research."
         )
 
+    def validate_flight_result_details(state: ComparisonState, details: dict | None) -> str | None:
+        # Only validate flight-specific fields for flight research.
+        if state.category != "flight":
+            return None
+
+        flight_details = details or {}
+
+        # A stored flight must contain enough data to identify the option.
+        required_fields = (
+            "origin",
+            "destination",
+            "departure_date",
+            "airline",
+            "departure_time",
+            "arrival_time",
+        )
+
+        missing_fields = [
+            field
+            for field in required_fields
+            if not str(flight_details.get(field, "")).strip()
+        ]
+
+        if missing_fields:
+            return (
+                "Flight result is missing required details: "
+                + ", ".join(missing_fields)
+            )
+
+        expected_origin = state.criteria.get("origin")
+        expected_destination = state.criteria.get("destination")
+
+        def same_location(expected: str | None, actual: str | None) -> bool:
+            # Missing expected criteria cannot create a conflict.
+            if not expected:
+                return True
+
+            if not actual:
+                return False
+
+            expected_value = normalize_identity(str(expected))
+            actual_value = normalize_identity(str(actual))
+
+            # Allow forms such as "Istanbul" and "Istanbul Airport".
+            return(
+                expected_value == actual_value
+                or expected_value in actual_value
+                or actual_value in expected_value
+            )
+
+        if not same_location(
+            expected_origin,
+            flight_details.get("origin")
+        ):
+
+            return (
+                "Flight origin does not match the requested origin. "
+                f"Expected: {expected_origin}. "
+                f"Received: {flight_details.get('origin')}."
+            )
+
+        if not same_location(
+            expected_destination,
+            flight_details.get("destination")
+        ):
+
+            return(
+                "Flight destination does not match the requested destination. "
+                f"Expected: {expected_destination}. "
+                f"Received: {flight_details.get('destination')}."
+            )
+
+        return None
+    
+
     def record_validation_failure(
         state: ComparisonState,
         result: ComparisonResult,
@@ -229,6 +304,7 @@ def create_research_tools(
         return (
             f"Category: {state.category}\n"
             f"Target product: {state.target_product}\n"
+            f"Criteria: {json.dumps(state.criteria, ensure_ascii=False)}\n"
             f"Coverage complete: "
             f"{state.coverage_complete()}\n"
             f"Remaining sources: {remaining}\n"
@@ -627,6 +703,18 @@ def create_research_tools(
                     "Product identity does not match the user's request. "
                     f"Reason: {identity_conflict}"
                 )
+
+        # Validate structured flight data before storing the result.
+        flight_error = validate_flight_result_details(
+            state,
+            details,
+        )
+
+        if flight_error:
+            return (
+                "RESULT BLOCKED: "
+                f"{flight_error}"
+            )
 
 
         money_error = validate_money_values(
