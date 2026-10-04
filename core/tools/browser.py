@@ -12,6 +12,7 @@ from mcp.types import TextContent, CallToolResult
 from core.research.evidence import (
     ObservationStore,
     get_focused_snapshot,
+    get_interactive_snapshot
 )
 
 from urllib.parse import urlparse
@@ -56,6 +57,9 @@ class BrowserManager:
         # browser actions can reuse the same target for automatic observations.
         self._last_snapshot_focus: str | None = None
 
+        # Remember which snapshot mode was used last.
+        self._last_snapshot_mode = "focused"
+
         # Get the active research controller when needed
         self._research_controller_getter = None
 
@@ -63,6 +67,7 @@ class BrowserManager:
     def reset_request_focus(self) -> None:
         # Do not carry a semantic snapshot focus into a new user request.
         self._last_snapshot_focus = None
+        self._last_snapshot_mode = "focused"
 
 
 
@@ -305,6 +310,7 @@ class BrowserManager:
             ):
                 auto_observation = await self._capture_snapshot(
                     focus=self._last_snapshot_focus,
+                    mode=self._last_snapshot_mode
                 )
 
                 response = response.model_copy(
@@ -331,16 +337,25 @@ class BrowserManager:
             return response
 
 
-    async def capture_snapshot(
-        self,
-        focus: str | None = None,
-    ) -> str:
+    async def capture_snapshot(self, focus: str | None = None, mode: str = "focused") -> str:
+
+        normalized_mode = mode.strip().lower()
+
+        # Allow only known snapshot modes
+        if normalized_mode not in {"focused", "interactive", "full"}:
+            return(
+                "OBSERVATION FAILED: Invalid snapshot mode. "
+                "Use 'focused', 'interactive', or 'full'."
+            )
 
         # Normalize and remember the latest meaningful focus
         normalized_focus = focus.strip() if focus else None
 
         if normalized_focus:
             self._last_snapshot_focus = normalized_focus
+
+        # Remember the mode for auto observs
+        self._last_snapshot_mode = normalized_mode
 
         async with self._action_lock:
             # Reuse the current snapshot if the page did not change
@@ -357,61 +372,91 @@ class BrowserManager:
                         print(
                             "[BrowserSnapshot] cache_hit=True | "
                             f"focus={normalized_focus!r}"
+                            f"mode={normalized_mode}"
                         )
 
                         return self._format_observation(
                             observation,
                             focus=normalized_focus,
+                            mode=normalized_mode
                         )
 
             # No reusable snapshot exists, so read the browser again
             return await self._capture_snapshot(
                 focus=normalized_focus,
+                mode=normalized_mode
             )
 
 
-    def _format_observation(
-        self,
-        observation,
-        focus: str | None = None,
-    ) -> str:
+    def _format_observation(self, observation, focus: str | None = None, mode: str = "focuses") -> str:
         # Start with the complete stored snapshot
         page_url = observation.page_url
         page_text = observation.page_text
 
-        # Full snapshots stay stored internally as evidence.
-        # When a semantic focus exists, never fall back to sending
-        # the complete page snapshot to the model.
-        if focus:
-            focused_snapshot = get_focused_snapshot(
-                page_text,
-                focus,
-                page_url=page_url,
-            )
+
+        if mode == "interactive":
+            # Keep only controls and nearby context needed for browser actions
+            interactive_snapshot = get_interactive_snapshot(page_text)
 
             print(
-                "[BrowserSnapshot] focused_result="
-                f"{len(focused_snapshot):,} chars"
+                "[BrowserSnapshot] interactive_result="
+                f"{len(interactive_snapshot):,} chars"
             )
 
-            snapshot_mode = "focused"
+            snapshot_mode = "interactive"
 
-            if focused_snapshot.strip():
-                model_page_text = focused_snapshot
+            if interactive_snapshot.strip():
+                model_page_text = interactive_snapshot
 
             else:
                 model_page_text = (
-                    "FOCUSED BROWSER SNAPSHOT\n"
-                    f"Focus: {focus}\n\n"
-                    "No sufficiently relevant page region was found "
-                    "for this focus.\n"
-                    "The complete snapshot remains stored internally "
-                    "as evidence and was not sent to the model.\n"
-                    "Use browser_find with a more specific product name, "
-                    "model, price, seller, or distinctive phrase if needed."
+                    "INTERACTIVE BROWSER SNAPSHOT\n\n"
+                    "No interactive controls were found on the current page.\n"
+                    "The complete snapshot remains stored internally as evidence."
+                )
+        
+        elif mode == "focused":
+            # Full snapshots stay stored internally as evidence.
+            # When a semantic focus exists, never fall back to sending
+            # the complete page snapshot to the model.
+            if focus:
+                focused_snapshot = get_focused_snapshot(
+                    page_text,
+                    focus,
+                    page_url=page_url,
                 )
 
+                print(
+                    "[BrowserSnapshot] focused_result="
+                    f"{len(focused_snapshot):,} chars"
+                )
+
+                if focused_snapshot.strip():
+                    model_page_text = focused_snapshot
+
+                else:
+                    model_page_text = (
+                        "FOCUSED BROWSER SNAPSHOT\n"
+                        f"Focus: {focus}\n\n"
+                        "No sufficiently relevant page region was found "
+                        "for this focus.\n"
+                        "The complete snapshot remains stored internally "
+                        "as evidence and was not sent to the model.\n"
+                        "Use browser_find with a more specific product name, "
+                        "model, price, seller, or distinctive phrase if needed."
+                    )
+
+            else:
+                model_page_text = (
+                "FOCUSED BROWSER SNAPSHOT\n\n"
+                "No focus was provided.\n"
+                "Use a short, specific focus or choose another snapshot mode."
+                )   
+
+            snapshot_mode = "focused"
+
         else:
+            # Full mode sends the complete stored page snapshot
             model_page_text = page_text
             snapshot_mode = "full"
 
@@ -436,16 +481,15 @@ class BrowserManager:
         )
     
 
-    async def _capture_snapshot(
-        self,
-        focus: str | None = None,
-    ) -> str:
+    async def _capture_snapshot(self, focus: str | None = None, mode: str = "focused") -> str:
         if self.session is None:
             return "OBSERVATION FAILED: Browser session is not started."
 
 
         print(
             f"[BrowserSnapshot] focus={focus!r}"
+            f"focus={focus!r} | "
+            f"mode={mode}"
         )
 
         # Read directly from the existing MCP session.
@@ -512,6 +556,7 @@ class BrowserManager:
         return self._format_observation(
             observation,
             focus=focus,
+            mode=mode
         )
 
     async def start(self):
@@ -527,9 +572,7 @@ class BrowserManager:
         )
 
         @tool
-        async def browser_snapshot(
-            focus: str,
-        ) -> str:
+        async def browser_snapshot(focus: str | None = None, mode: str ="focused") -> str:
             """
             Read the current page and store a browser observation.
 
@@ -552,6 +595,7 @@ class BrowserManager:
             """
             return await self.capture_snapshot(
                 focus=focus,
+                mode=mode
             )
 
         # Replace only the agent-facing snapshot tool.
