@@ -1,6 +1,8 @@
 import re
 import asyncio
 
+from typing import Literal
+
 from contextlib import AsyncExitStack # For Playwright Connection
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -149,7 +151,9 @@ class BrowserManager:
         # Requires a fresh observation before the next decision
         return tool_name in {
             "browser_click",
-            "browser_navigate"
+            "browser_navigate",
+            "browser_type",
+            "browser_fill_form"
         }
 
     
@@ -371,7 +375,7 @@ class BrowserManager:
                     ):
                         print(
                             "[BrowserSnapshot] cache_hit=True | "
-                            f"focus={normalized_focus!r}"
+                            f"focus={normalized_focus!r} | "
                             f"mode={normalized_mode}"
                         )
 
@@ -388,7 +392,7 @@ class BrowserManager:
             )
 
 
-    def _format_observation(self, observation, focus: str | None = None, mode: str = "focuses") -> str:
+    def _format_observation(self, observation, focus: str | None = None, mode: str = "focused") -> str:
         # Start with the complete stored snapshot
         page_url = observation.page_url
         page_text = observation.page_text
@@ -455,10 +459,15 @@ class BrowserManager:
 
             snapshot_mode = "focused"
 
-        else:
+        elif mode == "full":
             # Full mode sends the complete stored page snapshot
             model_page_text = page_text
             snapshot_mode = "full"
+
+        else:
+            raise ValueError(
+                f"Unsupported snapshot mode: {mode}"
+            )
 
         print(
             "[BrowserSnapshot] "
@@ -487,7 +496,7 @@ class BrowserManager:
 
 
         print(
-            f"[BrowserSnapshot] focus={focus!r}"
+            "[BrowserSnapshot] "
             f"focus={focus!r} | "
             f"mode={mode}"
         )
@@ -572,26 +581,47 @@ class BrowserManager:
         )
 
         @tool
-        async def browser_snapshot(focus: str | None = None, mode: str ="focused") -> str:
+        async def browser_snapshot(focus: str | None = None, mode: Literal["focused", "interactive", "full"] = "focused") -> str:
             """
             Read the current page and store a browser observation.
 
-            focus MUST be a short, specific description of what you are
-            looking for on the current page.
+            Choose the snapshot mode based on what you need to do next.
 
-            Good examples:
-            - "iPhone 18 Pro"
-            - "RTX 5070"
-            - "flight Istanbul Berlin"
-            - "hotel room price"
+            Use "interactive" when you need to interact with the page:
+            - fill a form
+            - type into a textbox
+            - choose an autocomplete option
+            - select an airport, hotel, date, passenger, or rental option
+            - click buttons, checkboxes, radio buttons, or dropdowns
+
+            Use "focused" when you need to read a specific result:
+            - product prices
+            - flight results and prices
+            - hotel results
+            - search results
+            - offers or sellers
+
+            Use "full" only when focused and interactive modes are not enough.
+
+            For focused mode, focus should be a short and specific target.
+
+            Good focused examples:
+            - "iPhone 18 Pro prices"
+            - "RTX 5070 offers"
+            - "Istanbul to Izmir flight results"
+            - "hotel room prices"
+
+            For interactive mode, focus may describe the current form.
+
+            Good interactive examples:
+            - "Pegasus flight search form"
+            - "airport autocomplete options"
+            - "hotel booking form"
+            - "car rental search form"
 
             Do not pass the whole user request as focus.
 
-            The full snapshot is preserved internally while the model
-            receives a smaller relevant view.
-
-            Returns an observation ID when capture succeeds.
-            The observation alone does not verify a price or seller.
+            The complete snapshot is preserved internally as evidence.
             """
             return await self.capture_snapshot(
                 focus=focus,

@@ -243,5 +243,61 @@ class InteractiveSnapshotTests(unittest.TestCase):
         )
 
 
+    def test_keeps_link_autocomplete_options(self):
+        page_text = """
+- textbox "Nereden" [ref=e1]
+- list [ref=e2]
+  - link "İstanbul Tümü" [ref=e3]
+  - link "İstanbul Sabiha Gökçen" [ref=e4]
+  - link "İstanbul Havalimanı" [ref=e5]
+- textbox "Nereye" [ref=e6]
+""".strip()
+
+        result = get_interactive_snapshot(page_text)
+
+        # Autocomplete links must stay visible to the agent
+        self.assertIn(
+            'link "İstanbul Tümü" [ref=e3]',
+            result,
+        )
+
+        self.assertIn(
+            'link "İstanbul Sabiha Gökçen" [ref=e4]',
+            result,
+        )
+
+        self.assertIn(
+            'link "İstanbul Havalimanı" [ref=e5]',
+            result,
+        )
+
+
+    def test_default_limit_keeps_controls_after_first_twenty(self):
+        controls = [
+            f'- button "Control {index}" [ref=e{index}]'
+            for index in range(1, 26)
+        ]
+
+        page_text = "\n".join(controls)
+
+        result = get_interactive_snapshot(page_text)
+
+        # The default limit should no longer stop at 20 controls
+        self.assertIn(
+            'button "Control 20" [ref=e20]',
+            result,
+        )
+
+        self.assertIn(
+            'button "Control 21" [ref=e21]',
+            result,
+        )
+
+        self.assertIn(
+            'button "Control 25" [ref=e25]',
+            result,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

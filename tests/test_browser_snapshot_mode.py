@@ -245,3 +245,105 @@ def test_auto_observation_keeps_last_snapshot_mode():
 
     assert "AUTO CURRENT PAGE OBSERVATION" in result_text
     assert "INTERACTIVE AUTO OBSERVATION" in result_text
+
+
+def test_browser_type_triggers_auto_observation():
+    manager = BrowserManager(headless=True)
+
+    manager._last_snapshot_focus = "Pegasus flight search form"
+    manager._last_snapshot_mode = "interactive"
+
+    captured = {}
+
+    async def fake_capture_snapshot(*, focus=None, mode="focused"):
+        captured["focus"] = focus
+        captured["mode"] = mode
+        return "TYPE AUTO OBSERVATION"
+
+    manager._capture_snapshot = fake_capture_snapshot
+
+    request = SimpleNamespace(
+        name="browser_type",
+        args={},
+    )
+
+    async def fake_handler(_request):
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text="Typing completed.",
+                )
+            ],
+            isError=False,
+        )
+
+    result = asyncio.run(
+        manager._track_browser_action(
+            request,
+            fake_handler,
+        )
+    )
+
+    assert captured["focus"] == "Pegasus flight search form"
+    assert captured["mode"] == "interactive"
+
+    result_text = "\n".join(
+        block.text
+        for block in result.content
+        if block.type == "text"
+    )
+
+    assert "AUTO CURRENT PAGE OBSERVATION" in result_text
+    assert "TYPE AUTO OBSERVATION" in result_text
+
+
+def test_browser_fill_form_triggers_auto_observation():
+    manager = BrowserManager(headless=True)
+
+    manager._last_snapshot_focus = "Pegasus flight search form"
+    manager._last_snapshot_mode = "interactive"
+
+    captured = {}
+
+    async def fake_capture_snapshot(*, focus=None, mode="focused"):
+        captured["focus"] = focus
+        captured["mode"] = mode
+        return "FILL FORM AUTO OBSERVATION"
+
+    manager._capture_snapshot = fake_capture_snapshot
+
+    request = SimpleNamespace(
+        name="browser_fill_form",
+        args={},
+    )
+
+    async def fake_handler(_request):
+        return CallToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text="Form filled.",
+                )
+            ],
+            isError=False,
+        )
+
+    result = asyncio.run(
+        manager._track_browser_action(
+            request,
+            fake_handler,
+        )
+    )
+
+    assert captured["focus"] == "Pegasus flight search form"
+    assert captured["mode"] == "interactive"
+
+    result_text = "\n".join(
+        block.text
+        for block in result.content
+        if block.type == "text"
+    )
+
+    assert "AUTO CURRENT PAGE OBSERVATION" in result_text
+    assert "FILL FORM AUTO OBSERVATION" in result_text

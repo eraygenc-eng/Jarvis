@@ -171,7 +171,7 @@ def _find_parent_ref(
     return None
 
 
-def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_controls: int = 20) -> str:
+def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_controls: int = 120) -> str:
     """Build a small snapshot with interactive controls."""
 
     # Keep controls that can be used for browser actions
@@ -186,6 +186,9 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
         "spinbutton",
         "switch",
         "gridcell",
+        "link",
+        "tab",
+        "menuitem",
     }
 
     lines = page_text.splitlines()
