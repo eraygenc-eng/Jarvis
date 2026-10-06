@@ -55,6 +55,9 @@ class BrowserManager:
         # Track whether the current page may have changed
         self._page_changed = True
 
+        # Pause browser automation during human verification
+        self._waiting_for_human_verification = False
+
         # Remember the latest semantic snapshot focus so page-changing
         # browser actions can reuse the same target for automatic observations.
         self._last_snapshot_focus: str | None = None
@@ -156,6 +159,120 @@ class BrowserManager:
             "browser_fill_form"
         }
 
+
+    def _detect_page_interruption(self, page_text: str) -> tuple[str | None, str | None]:
+        """
+        Detect common page interruptions.
+
+        This only detects interruptions.
+        It does not click or bypass anything.
+        """
+
+        if not page_text:
+            return None, None
+
+        text = page_text.lower()
+
+        # Human verification must never be bypassed automatically.
+        captcha_patterns = [
+            r"verify you are human",
+            r"confirm you are human",
+            r"prove you are human",
+            r"i am human",
+            r"i'm not a robot",
+            r"not a robot",
+            r"insan olduğunuzu doğrulayın",
+            r"insan oldugunuzu dogrulayin",
+            r"robot olmadığınızı",
+            r"robot olmadiginizi",
+            r"\bcaptcha\b",
+            r"\brecaptcha\b",
+            r"\bhcaptcha\b",
+            r"\bturnstile\b",
+        ]
+
+        for pattern in captcha_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+
+                # Stop automatic actions during human verification.
+                self._waiting_for_human_verification = True
+
+                return (
+                    "captcha",
+                    "Human verification was detected. "
+                    "Do not try to bypass it automatically. "
+                    "Ask the user to complete the verification manually, "
+                    "then continue from the same page."
+                )
+
+            # CAPTCHA was active before, but it is not visible anymore.
+            if self._waiting_for_human_verification:
+                self._waiting_for_human_verification = False
+
+                print(
+                    "[BrowserInterruption] "
+                    "human_verification_cleared=True"
+                )
+
+            # Look for real cookie-consent controls.
+            cookie_patterns = [
+                r'button[^\n]{0,100}"accept all',
+                r'button[^\n]{0,100}"allow all',
+                r'button[^\n]{0,100}"accept cookies',
+                r'button[^\n]{0,100}"accept all cookies',
+                r'button[^\n]{0,100}"tümünü kabul et',
+                r'button[^\n]{0,100}"tumunu kabul et',
+                r'button[^\n]{0,100}"çerezleri kabul et',
+                r'button[^\n]{0,100}"cerezleri kabul et',
+                r'button[^\n]{0,100}"kabul et',
+            ]
+
+            for pattern in cookie_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return (
+                        "cookie",
+                        "A cookie consent banner appears to be blocking the page. "
+                        "Handle the consent controls before continuing."
+                    )
+
+                # Detect common blocking dialogs and newsletter popups.
+                popup_context_patterns = [
+                    r"\bdialog\b",
+                    r"\bmodal\b",
+                    r"newsletter",
+                    r"subscribe",
+                    r"sign up",
+                    r"kampanyalardan haberdar",
+                    r"bildirimlere izin",
+                ]
+
+                close_control_patterns = [
+                    r'button[^\n]{0,80}"close',
+                    r'button[^\n]{0,80}"kapat',
+                    r'button[^\n]{0,80}"dismiss',
+                    r'button[^\n]{0,80}"not now',
+                    r'button[^\n]{0,80}"şimdi değil',
+                    r'button[^\n]{0,80}"simdi degil',
+                ]
+
+                has_popup_context = any(
+                    re.search(pattern, text, re.IGNORECASE)
+                    for pattern in popup_context_patterns
+                )
+
+                has_close_control = any(
+                    re.search(pattern, text, re.IGNORECASE)
+                    for pattern in close_control_patterns
+                )
+
+                if has_popup_context and has_close_control:
+                    return(
+                        "popup",
+                        "A blocking popup or dialog appears to be open. "
+                        "Close or dismiss it before continuing with the main task."
+                    )
+                
+            return None, None
     
 
     async def _track_browser_action(self, request, handler):
@@ -164,6 +281,36 @@ class BrowserManager:
             tool_name = getattr(request, "name", "")
             arguments = getattr(request, "args", {})
             url = arguments.get("url", "")
+
+            # Pause page-changing actions during human verification.
+            # Read-only browser tools are still allowed
+            if(
+                self._waiting_for_human_verification
+                and self._browser_action_may_change_page(tool_name)
+            ):
+
+                print(
+                    "[BrowserInterruption] "
+                    f"blocked_action={tool_name} | "
+                    "reason=human_verification"
+                )
+
+                return CallToolResult(
+                    content = [
+                        TextContent(
+                            type="text",
+                            text=(
+                                "BROWSER PAUSED: Human verification is active. "
+                                "Do not click, type, fill forms, navigate, or retry "
+                                "browser actions automatically. "
+                                "Ask the user to complete the verification manually. "
+                                "After the user finishes, request a fresh "
+                                "browser_snapshot and continue from the same page."
+                            ),
+                        )
+                    ],
+                    isError=False,
+                )
 
             # Get the controller only when research is active
             controller = self._get_research_controller()
@@ -362,8 +509,12 @@ class BrowserManager:
         self._last_snapshot_mode = normalized_mode
 
         async with self._action_lock:
-            # Reuse the current snapshot if the page did not change
-            if not self._page_changed:
+            # Reuse the current snapshot only when human verification is not active.
+            # During manual verification, the browser may change outside Jarvis.
+            if (
+                not self._page_changed
+                and not self._waiting_for_human_verification
+            ):
                 observation_id = self.observations.current_observation_id
 
                 if observation_id is not None:
@@ -396,6 +547,28 @@ class BrowserManager:
         # Start with the complete stored snapshot
         page_url = observation.page_url
         page_text = observation.page_text
+
+
+        # Detect anything that may interrupt normal browsing
+        interruption_kind, interruption_message = (self._detect_page_interruption(page_text))
+
+        # This text will be added to the model-facing observation
+        interruption_notice = ""
+
+        if interruption_kind is not None:
+            print(
+                "[BrowserInterruption] "
+                f"kind={interruption_kind}"
+            )
+
+            interruption_notice = (
+                "\n\n"
+                "### Browser Interruption\n"
+                f"Type: {interruption_kind}\n"
+                f"{interruption_message}\n"
+            )
+
+
 
 
         if mode == "interactive":
@@ -482,7 +655,8 @@ class BrowserManager:
             f"- Page URL: {page_url}\n"
             f"Snapshot mode: {snapshot_mode}\n"
             "This records page content, not a verified offer.\n"
-            "The complete snapshot remains stored as evidence.\n\n"
+            "The complete snapshot remains stored as evidence."
+            f"{interruption_notice}\n\n"
             "### Snapshot\n"
             "```yaml\n"
             f"{model_page_text}\n"
