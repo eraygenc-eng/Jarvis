@@ -191,6 +191,7 @@ class BrowserManager:
             r"\bturnstile\b",
         ]
 
+        # Check all CAPTCHA patterns first.
         for pattern in captcha_patterns:
             if re.search(pattern, text, re.IGNORECASE):
 
@@ -205,74 +206,380 @@ class BrowserManager:
                     "then continue from the same page."
                 )
 
-            # CAPTCHA was active before, but it is not visible anymore.
-            if self._waiting_for_human_verification:
-                self._waiting_for_human_verification = False
+        # CAPTCHA was active before, but it is not visible anymore.
+        if self._waiting_for_human_verification:
+            self._waiting_for_human_verification = False
 
-                print(
-                    "[BrowserInterruption] "
-                    "human_verification_cleared=True"
+            print(
+                "[BrowserInterruption] "
+                "human_verification_cleared=True"
+            )
+
+        # Detect cookie consent banners.
+        cookie_context_patterns = [
+            r"\bcookie\b",
+            r"\bconsent\b",
+            r"\bçerez\b",
+            r"\bcerez\b",
+            r"çerez tercihleri",
+            r"cerez tercihleri",
+            r"çerez ayarları",
+            r"cerez ayarlari",
+            r"zorunlu çerez",
+            r"zorunlu cerez",
+        ]
+
+        cookie_action_patterns = [
+            r"accept all",
+            r"accept cookies",
+            r"allow all",
+            r"reject all",
+            r"only necessary",
+            r"necessary only",
+            r"kabul et",
+            r"tümünü kabul et",
+            r"tumunu kabul et",
+            r"reddet",
+            r"tümünü reddet",
+            r"tumunu reddet",
+            r"çerezler ayarları",
+            r"cerezler ayarlari",
+        ]
+
+        has_cookie_context = any(
+            re.search(
+                pattern,
+                text,
+                re.IGNORECASE,
+            )
+            for pattern in cookie_context_patterns
+        )
+
+        has_cookie_action = any(
+            re.search(
+                pattern,
+                text,
+                re.IGNORECASE,
+            )
+            for pattern in cookie_action_patterns
+        )
+
+        if has_cookie_context and has_cookie_action:
+            return (
+                "cookie",
+                "A cookie consent banner appears to be blocking the page. "
+                "Handle the consent controls before continuing."
+            )
+
+        # Detect common blocking dialogs and newsletter popups.
+        popup_context_patterns = [
+            r"\bdialog\b",
+            r"\bmodal\b",
+            r"newsletter",
+            r"subscribe",
+            r"sign up",
+            r"kampanyalardan haberdar",
+            r"bildirimlere izin",
+        ]
+
+        close_control_patterns = [
+            r'button[^\n]{0,80}"close',
+            r'button[^\n]{0,80}"kapat',
+            r'button[^\n]{0,80}"dismiss',
+            r'button[^\n]{0,80}"not now',
+            r'button[^\n]{0,80}"şimdi değil',
+            r'button[^\n]{0,80}"simdi degil',
+        ]
+
+        has_popup_context = any(
+            re.search(pattern, text, re.IGNORECASE)
+            for pattern in popup_context_patterns
+        )
+
+        has_close_control = any(
+            re.search(pattern, text, re.IGNORECASE)
+            for pattern in close_control_patterns
+        )
+
+        if has_popup_context and has_close_control:
+            return (
+                "popup",
+                "A blocking popup or dialog appears to be open. "
+                "Close or dismiss it before continuing with the main task."
+            )
+
+        return None, None
+
+
+    def _debug_interruption_candidates(self, page_text: str) -> None:
+        """
+        Print only lines that may belong to a cookie banner or popup.
+        """
+
+        if not page_text:
+            return
+
+        keywords = (
+            "cookie",
+            "çerez",
+            "cerez",
+            "kabul",
+            "reddet",
+            "accept",
+            "reject",
+            "consent",
+            "privacy",
+            "gizlilik",
+        )
+
+        matching_lines = []
+
+        for line in page_text.splitlines():
+            normalized_line = line.casefold()
+
+            if any(
+                keyword in normalized_line
+                for keyword in keywords
+            ):
+                matching_lines.append(line.strip())
+
+        print(
+            "[InterruptionDebug] "
+            f"candidate_lines={len(matching_lines)}"
+        )
+
+        # Keep terminal output small
+        for line in matching_lines[:30]:
+            print(
+                "[InterruptionDebug] "
+                f"{line}"
+            )
+
+
+    def _find_safe_interruption_action(self, page_text: str) -> tuple[str, str, str] | None:
+        """
+        Find a safe button for cookie banners or normal popups.
+
+        Returns:
+            (interruption_kind, element_label, ref)
+        """
+
+        if not page_text:
+            return None
+
+        # Detect the current interruption.
+        interruption_kind, _ = self._detect_page_interruption(
+            page_text
+        )
+
+        # Never automate CAPTCHA or human verification.
+        if interruption_kind not in {"cookie", "popup"}:
+            return None
+
+        controls: list[tuple[str, str]] = []
+
+        # Normal clickable controls:
+        # - button "Accept all" [ref=e10]
+        # - link "Reject all" [ref=e11]
+        named_control_pattern = re.compile(
+            r'^\s*-\s+(?:button|link)\s+"([^"]+)"'
+            r'[^\n]*\[ref=([^\]]+)\]',
+            re.IGNORECASE,
+        )
+
+        # Some websites expose clickable items as generic nodes:
+        # - generic [ref=e12] [cursor=pointer]: Accept all
+        generic_control_pattern = re.compile(
+            r'^\s*-\s+generic\s+'
+            r'\[ref=([^\]]+)\]'
+            r'[^\n]*\[cursor=pointer\]'
+            r'\s*:\s*(.+?)\s*$',
+            re.IGNORECASE,
+        )
+
+        for line in page_text.splitlines():
+
+            named_match = named_control_pattern.search(line)
+
+            if named_match is not None:
+                label = named_match.group(1).strip()
+                ref = named_match.group(2).strip()
+
+                controls.append(
+                    (label, ref)
                 )
 
-            # Look for real cookie-consent controls.
-            cookie_patterns = [
-                r'button[^\n]{0,100}"accept all',
-                r'button[^\n]{0,100}"allow all',
-                r'button[^\n]{0,100}"accept cookies',
-                r'button[^\n]{0,100}"accept all cookies',
-                r'button[^\n]{0,100}"tümünü kabul et',
-                r'button[^\n]{0,100}"tumunu kabul et',
-                r'button[^\n]{0,100}"çerezleri kabul et',
-                r'button[^\n]{0,100}"cerezleri kabul et',
-                r'button[^\n]{0,100}"kabul et',
+                continue
+
+            generic_match = generic_control_pattern.search(line)
+
+            if generic_match is not None:
+                ref = generic_match.group(1).strip()
+                label = generic_match.group(2).strip()
+
+                controls.append(
+                    (label, ref)
+                )
+
+        if not controls:
+            return None
+
+        if interruption_kind == "cookie":
+
+            # Prefer privacy-friendly actions.
+            preferred_cookie_patterns = [
+                r"^reject all$",
+                r"^decline all$",
+                r"^reject$",
+                r"^decline$",
+                r"^only necessary$",
+                r"^necessary only$",
+                r"^essential only$",
+                r"^continue without accepting$",
+                r"^tümünü reddet$",
+                r"^tumunu reddet$",
+                r"^reddet$",
+                r"^yalnızca gerekli$",
+                r"^yalnizca gerekli$",
+                r"^sadece gerekli$",
+                r"^gerekli çerezler$",
+                r"^gerekli cerezler$",
             ]
 
-            for pattern in cookie_patterns:
-                if re.search(pattern, text, re.IGNORECASE):
+            # Check ALL controls for a safer option first.
+            for label, ref in controls:
+                normalized_label = label.casefold()
+
+                if any(
+                    re.fullmatch(
+                        pattern,
+                        normalized_label,
+                        re.IGNORECASE,
+                    )
+                    for pattern in preferred_cookie_patterns
+                ):
                     return (
                         "cookie",
-                        "A cookie consent banner appears to be blocking the page. "
-                        "Handle the consent controls before continuing."
+                        label,
+                        ref,
                     )
 
-                # Detect common blocking dialogs and newsletter popups.
-                popup_context_patterns = [
-                    r"\bdialog\b",
-                    r"\bmodal\b",
-                    r"newsletter",
-                    r"subscribe",
-                    r"sign up",
-                    r"kampanyalardan haberdar",
-                    r"bildirimlere izin",
-                ]
+            # Only accept cookies if no safer option exists.
+            fallback_cookie_patterns = [
+                r"^accept all$",
+                r"^allow all$",
+                r"^accept cookies$",
+                r"^accept all cookies$",
+                r"^tümünü kabul et$",
+                r"^tumunu kabul et$",
+                r"^çerezleri kabul et$",
+                r"^cerezleri kabul et$",
+                r"^kabul et$",
+            ]
 
-                close_control_patterns = [
-                    r'button[^\n]{0,80}"close',
-                    r'button[^\n]{0,80}"kapat',
-                    r'button[^\n]{0,80}"dismiss',
-                    r'button[^\n]{0,80}"not now',
-                    r'button[^\n]{0,80}"şimdi değil',
-                    r'button[^\n]{0,80}"simdi degil',
-                ]
+            for label, ref in controls:
+                normalized_label = label.casefold()
 
-                has_popup_context = any(
-                    re.search(pattern, text, re.IGNORECASE)
-                    for pattern in popup_context_patterns
-                )
+                if any(
+                    re.fullmatch(
+                        pattern,
+                        normalized_label,
+                        re.IGNORECASE,
+                    )
+                    for pattern in fallback_cookie_patterns
+                ):
+                    return (
+                        "cookie",
+                        label,
+                        ref,
+                    )
 
-                has_close_control = any(
-                    re.search(pattern, text, re.IGNORECASE)
-                    for pattern in close_control_patterns
-                )
+        if interruption_kind == "popup":
 
-                if has_popup_context and has_close_control:
-                    return(
+            close_patterns = [
+                r"^close$",
+                r"^dismiss$",
+                r"^not now$",
+                r"^no thanks$",
+                r"^maybe later$",
+                r"^kapat$",
+                r"^şimdi değil$",
+                r"^simdi degil$",
+                r"^hayır teşekkürler$",
+                r"^hayir tesekkurler$",
+            ]
+
+            for label, ref in controls:
+                normalized_label = label.casefold()
+
+                if any(
+                    re.fullmatch(
+                        pattern,
+                        normalized_label,
+                        re.IGNORECASE,
+                    )
+                    for pattern in close_patterns
+                ):
+                    return (
                         "popup",
-                        "A blocking popup or dialog appears to be open. "
-                        "Close or dismiss it before continuing with the main task."
+                        label,
+                        ref,
                     )
-                
-            return None, None
+
+        return None
+
+
+    async def _handle_safe_interruption(self, page_text: str) -> bool:
+        """
+        Handle a safe cookie banner or normal popup.
+
+        Returns True only when a safe control was clicked.
+        """
+
+        action = self._find_safe_interruption_action(page_text)
+
+        if action is None:
+            return False
+
+        interruption_kind, label, ref = action
+
+        print(
+            "[BrowserInterruption] "
+            f"auto_action={interruption_kind} | "
+            f"label={label!r} | "
+            f"ref={ref}"
+        )
+
+        # Click directly through the current MCP session
+        response = await self.session.call_tool(
+            "browser_click",
+            arguments={
+                "element": label,
+                "target": ref,
+            },
+        )
+
+        # Do not pretend the interruption was removed if click failed
+        if response.isError:
+            print(
+                "[BrowserInterruption] "
+                f"auto_action_failed={interruption_kind} | "
+                f"ref={ref}"
+            )
+
+            return False
+
+        # The page may have changed after the click
+        self._page_changed = True
+        self.observations.invalidate_current()
+
+        print(
+            "[BrowserInterruption] "
+            f"auto_action_success={interruption_kind} | "
+            f"ref={ref}"
+        )
+
+        return True
     
 
     async def _track_browser_action(self, request, handler):
@@ -664,7 +971,7 @@ class BrowserManager:
         )
     
 
-    async def _capture_snapshot(self, focus: str | None = None, mode: str = "focused") -> str:
+    async def _capture_snapshot(self, focus: str | None = None, mode: str = "focused", auto_interruption_depth: int = 0) -> str:
         if self.session is None:
             return "OBSERVATION FAILED: Browser session is not started."
 
@@ -726,6 +1033,21 @@ class BrowserManager:
                 "OBSERVATION NOT STORED: The page snapshot is empty.\n\n"
                 + text
             )
+
+        # Debug possible cookie and popup controls
+        self._debug_interruption_candidates(page_text)
+
+        # Handle safe page interruptions before stoping the observ
+        if auto_interruption_depth < 3:
+            interruption_handled = await self._handle_safe_interruption(page_text)  
+
+            if interruption_handled:
+                # Read the page again after closing the interruption
+                return await self._capture_snapshot(
+                    focus=focus,
+                    mode=mode,
+                    auto_interruption_depth=auto_interruption_depth + 1
+                )
 
         observation = self.observations.capture(
             page_url=page_url,
