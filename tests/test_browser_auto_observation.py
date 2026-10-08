@@ -1,3 +1,4 @@
+
 import unittest
 from unittest.mock import AsyncMock
 
@@ -59,8 +60,10 @@ class BrowserAutoObservationTests(
             handler,
         )
 
+        # Check both the focus and the snapshot mode.
         manager._capture_snapshot.assert_awaited_once_with(
-            focus="iPhone 18 Pro"
+            focus="iPhone 18 Pro",
+            mode="focused",
         )
 
         text = "\n".join(
@@ -221,8 +224,10 @@ class BrowserAutoObservationTests(
             handler,
         )
 
+        # Check both the focus and the snapshot mode.
         manager._capture_snapshot.assert_awaited_once_with(
-            focus="iPhone 18 Pro Max"
+            focus="iPhone 18 Pro Max",
+            mode="focused",
         )
 
         text = "\n".join(

@@ -228,7 +228,63 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
     used_refs: set[str] = set()
     total_chars = 0
 
-    for index, ref in controls[:max_controls]:
+    
+    # Preserve the original page order for ordinary form controls.
+    ordered_controls = controls[:max_controls]
+
+    # On large pages, reserve a small number of slots for confirmation controls.
+    # Keep initial form fields visible and respect intentionally small limits.
+    if (
+        max_controls >= 8
+        and max_chars >= 1000
+        and (len(controls) > max_controls or len(page_text) > max_chars)
+    ):
+        prefix_count = min(4, max_controls)
+        prefix = controls[:prefix_count]
+
+        confirmation_pattern = re.compile(
+            r"\b(?:tamam|onayla|uygula|confirm|apply|done|ok)\b",
+            re.IGNORECASE,
+        )
+
+        confirmation_controls = [
+            (index, ref)
+            for index, ref in controls[prefix_count:]
+            if (
+                re.match(
+                    r"^\s*-\s*(?:button|link|generic)\b",
+                    lines[index],
+                    re.IGNORECASE,
+                )
+                and confirmation_pattern.search(lines[index])
+            )
+        ][:2]
+
+        if confirmation_controls:
+            important_refs = {
+                ref for _, ref in confirmation_controls
+            }
+
+            remaining_controls = [
+                control
+                for control in controls[prefix_count:]
+                if control[1] not in important_refs
+            ]
+
+            remaining_slots = (
+                max_controls
+                - len(prefix)
+                - len(confirmation_controls)
+            )
+
+            ordered_controls = (
+                prefix
+                + confirmation_controls
+                + remaining_controls[:remaining_slots]
+            )
+
+    for index, ref in ordered_controls:
+
         # Do not add the same ref twice
         if ref in used_refs:
             continue

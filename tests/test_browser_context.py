@@ -1,3 +1,4 @@
+
 import unittest
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -419,7 +420,7 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             compacted[1].content,
         )
 
-    def test_policy_sees_structured_current_observation(self):
+    def test_policy_keeps_snapshot_available_after_structured_auto_observation(self):
         store = ObservationStore()
 
         # Create the current browser observation.
@@ -445,7 +446,41 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             name="browser_click",
         )
 
-        # The policy should see the current observation.
+        # An explicit snapshot should remain available after an auto observation.
+        visible = current_observation_is_visible(
+            [message],
+            store,
+        )
+
+        self.assertFalse(visible)
+
+    def test_policy_reads_structured_explicit_snapshot(self):
+        # Store a real page observation.
+        store = ObservationStore()
+
+        observation = store.capture(
+            "https://example.com/product",
+            "Product page data",
+        )
+
+        # Simulate a structured snapshot tool result.
+        message = ToolMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        f"Observation ID: {observation.observation_id}\n"
+                        "- Page URL: https://example.com/product\n"
+                        "### Snapshot\n"
+                        "Product page data"
+                    ),
+                }
+            ],
+            tool_call_id="call-explicit",
+            name="browser_snapshot",
+        )
+
+        # A valid explicit snapshot should be recognized.
         visible = current_observation_is_visible(
             [message],
             store,

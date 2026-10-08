@@ -3,9 +3,36 @@ from core.browser_context import extract_snapshot_metadata
 
 
 
+def _message_text(message: ToolMessage) -> str:
+    # Browser tool results can contain text or content blocks.
+    content = message.content
+
+    if isinstance(content, str):
+        return content
+
+    if not isinstance(content, list):
+        return ""
+
+    parts = []
+
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+
+        elif isinstance(block, dict):
+            block_text = block.get("text")
+
+            if isinstance(block_text, str):
+                parts.append(block_text)
+
+    return "\n".join(parts)
+
+
 def _snapshot_is_usable(message: ToolMessage) -> bool:
-    # Snapshot content must be useful for the next browser decision.
-    if not isinstance(message.content, str):
+    # Check the actual text of the browser observation.
+    text = _message_text(message)
+
+    if not text.strip():
         return False
 
     unusable_markers = {
@@ -17,7 +44,7 @@ def _snapshot_is_usable(message: ToolMessage) -> bool:
     }
 
     return not any(
-        marker in message.content
+        marker in text
         for marker in unusable_markers
     )
 
@@ -55,10 +82,7 @@ def current_observation_is_visible(messages, observation_store) -> bool:
 
         # Auto observations should not block an explicit snapshot.
         # The model may need to switch snapshot mode after the page changes.
-        if (
-            isinstance(message.content, str)
-            and "AUTO CURRENT PAGE OBSERVATION" in message.content
-        ):
+        if "AUTO CURRENT PAGE OBSERVATION" in _message_text(message):
             continue
 
         # Don't hide browser_snapshot when the current view is unusable

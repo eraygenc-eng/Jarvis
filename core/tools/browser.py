@@ -206,8 +206,8 @@ class BrowserManager:
                     "then continue from the same page."
                 )
 
-        # CAPTCHA was active before, but it is not visible anymore.
-        if self._waiting_for_human_verification:
+        # Check if human verification was active.
+        if getattr(self, "_waiting_for_human_verification", False):
             self._waiting_for_human_verification = False
 
             print(
@@ -818,9 +818,10 @@ class BrowserManager:
         async with self._action_lock:
             # Reuse the current snapshot only when human verification is not active.
             # During manual verification, the browser may change outside Jarvis.
+            # Reuse a snapshot only when the page has not changed.
             if (
                 not self._page_changed
-                and not self._waiting_for_human_verification
+                and not getattr(self, "_waiting_for_human_verification", False)
             ):
                 observation_id = self.observations.current_observation_id
 

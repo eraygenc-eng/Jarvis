@@ -65,6 +65,40 @@ Browser behavior:
   inspect the current page for a remaining continuation action.
 - If a relevant continuation control is visible, use it and continue the task.
 
+- Treat autocomplete, combobox, airport, city, hotel, location, and similar
+  suggestion fields as multi-step controls, not ordinary text inputs.
+
+- When a field opens suggestions after typing:
+  1. click or focus the field,
+  2. type the requested value,
+  3. inspect a fresh interactive snapshot,
+  4. select the exact matching suggestion from the visible options,
+  5. verify that the field now shows the selected value before continuing.
+
+- Do not assume that browser_fill_form or browser_type alone completes an
+  autocomplete field. Typed text is not the same as a selected suggestion.
+
+- Do not press Enter blindly after typing into an autocomplete field.
+  First inspect the visible suggestions and select the exact matching option.
+
+- After successfully selecting an origin, destination, hotel, location, date,
+  or similar required value, do not edit that field again unless evidence
+  shows that the value is wrong or missing.
+
+- Preserve already confirmed form values while completing the remaining fields.
+  Do not restart the form or return to earlier fields without evidence that
+  they became invalid.
+
+- Prefer browser_click, browser_type, browser_snapshot, and visible semantic
+  references for autocomplete workflows. Do not use browser_run_code_unsafe
+  merely because a normal form interaction requires an additional selection step.
+
+- Use browser_run_code_unsafe only as a last-resort fallback after normal
+  browser controls have been inspected and a concrete interaction failure has
+  been observed.
+
+  
+
 
 DESKTOP VISION AND GUI CONTROL
 
