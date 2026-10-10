@@ -1050,20 +1050,39 @@ class BrowserManager:
                     auto_interruption_depth=auto_interruption_depth + 1
                 )
 
+        
+        # Store the new browser observation.
         observation = self.observations.capture(
             page_url=page_url,
             page_text=page_text,
         )
 
-        # The stored snapshot now matches the current page
+        # The browser snapshot was captured successfully.
         self._page_changed = False
 
-
-        return self._format_observation(
+        # Format the result and detect possible interruptions.
+        result = self._format_observation(
             observation,
             focus=focus,
-            mode=mode
+            mode=mode,
         )
+
+        # A CAPTCHA snapshot must not block future snapshots.
+        if self._waiting_for_human_verification:
+            # Keep the evidence, but mark the current view as stale.
+            self.observations.invalidate_current()
+
+            # Allow a fresh snapshot after manual verification.
+            self._page_changed = True
+
+            print(
+                "[BrowserInterruption] "
+                "human_verification_pending=True | "
+                "snapshot_refresh_required=True"
+            )
+
+        return result
+
 
     async def start(self):
         # Open a persistent Playwright MCP session

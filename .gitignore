@@ -6,3 +6,5 @@ __pycache__/
 artifacts/
 performance*.log
 *.png
+data/airports.csv
+data/*.db
