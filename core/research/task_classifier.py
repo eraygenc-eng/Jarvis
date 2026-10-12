@@ -173,6 +173,40 @@ FLIGHT_SEARCH_KEYWORDS = [
     "search for a flight",
 ]
 
+
+FLIGHT_TOPIC_KEYWORDS = [
+    # Turkish flight words
+    "ucak",
+    "ucus",
+
+    # English flight words
+    "flight",
+    "flights",
+    "airfare",
+]
+
+FLIGHT_REQUEST_KEYWORDS = [
+    # Turkish request words
+    "bilet",
+    "bul",
+    "ara",
+    "ariyorum",
+    "en ucuz",
+    "en uygun",
+    "karsilastir",
+    "rezervasyon",
+    "satin al",
+
+    # English request words
+    "ticket",
+    "find",
+    "search",
+    "compare",
+    "cheapest",
+    "book",
+]
+
+
 ACTION_KEYWORDS = [
     # Turkish action phrases
     "satın al",
@@ -206,10 +240,29 @@ def classify_task(prompt: str) -> TaskType:
         if contains_keyword(prompt, keyword):
             return TaskType.COMPARISON
 
-    # Flight searches need the structured research workflow.
-    for keyword in FLIGHT_SEARCH_KEYWORDS:
-        if contains_keyword(prompt, keyword):
-            return TaskType.COMPARISON
+    
+    # Detect flight requests written in different ways
+    if is_flight_request(prompt):
+
+        # Keep direct booking requests as actions
+        booking_keywords = [
+            "bilet al",
+            "satin al",
+            "rezervasyon yap",
+            "rezerve et",
+            "book",
+            "buy",
+            "reserve",
+        ]
+
+        # Check if the user wants to book a ticket
+        for keyword in booking_keywords:
+            if contains_keyword(prompt, keyword):
+                return TaskType.ACTION
+
+        # Other flight searches use the research workflow
+        return TaskType.COMPARISON
+
 
     # Check direct action intent
     for keyword in ACTION_KEYWORDS:
@@ -218,3 +271,29 @@ def classify_task(prompt: str) -> TaskType:
 
     # Use lookup as the default task type
     return TaskType.LOOKUP
+
+
+def is_flight_request(prompt: str) -> bool:
+    """
+    Check if the user requests a flight-related task.
+    """
+
+    # Check known flight search phrases
+    for keyword in FLIGHT_SEARCH_KEYWORDS:
+        if contains_keyword(prompt, keyword):
+            return True
+
+    # Check if the request mentions flights
+    has_flight_topic = any(
+        contains_keyword(prompt, keyword)
+        for keyword in FLIGHT_TOPIC_KEYWORDS
+    )
+
+    # Check if the user wants a flight-related action
+    has_flight_request = any(
+        contains_keyword(prompt, keyword)
+        for keyword in FLIGHT_REQUEST_KEYWORDS
+    )
+
+    # Both conditions must be true
+    return has_flight_topic and has_flight_request

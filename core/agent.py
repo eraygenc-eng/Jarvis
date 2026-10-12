@@ -91,6 +91,11 @@ from core.tools.open_application import open_application
 from core.tools.close_application import close_application
 from core.tools.launch_game import launch_game
 from core.tools.web_search import web_search_tool
+from core.tools.airport_tools import create_airport_tools
+
+
+from core.database import get_db_connection
+
 
 from core.security.middleware import security_middleware
 from core.callbacks.timing import TimingCallback
@@ -322,6 +327,10 @@ class JarvisAgent:
             desktop_press_key,
             desktop_hotkey,
         ]
+
+        airport_tools = create_airport_tools(get_db_connection)
+
+        tools.extend(airport_tools)
 
         tools.extend(research_tools)
 
