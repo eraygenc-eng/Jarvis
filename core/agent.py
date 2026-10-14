@@ -96,15 +96,20 @@ from core.tools.airport_tools import create_airport_tools
 
 from core.database import get_db_connection
 
+from core.flight.flight_preprocessor import prepare_flight_request
+
 
 from core.security.middleware import security_middleware
 from core.callbacks.timing import TimingCallback
+
+from core.airport_resolver import apply_airport_choice
 
 
 from core.research.report import render_report_table
 from core.research.research_state import ResearchState
 from core.research.research_controller import ResearchController
 from core.research.source_planner import get_source_domain, is_dynamic_source
+from core.research.task_classifier import is_flight_request
 
 
 
@@ -138,6 +143,9 @@ class JarvisAgent:
 
         # Number of sources requested by the user
         self.pending_source_count: int | None = None
+
+        # Store the flight request while waiting for airport selection
+        self.pending_flight_request: dict | None = None
 
         # Active deterministic research controller
         self.research_controller = None
@@ -1011,6 +1019,158 @@ No transaction action or approval request is part of this report.
         planning_start = time.perf_counter()
 
         try:
+
+            # Check for a new flight request
+            if self.pending_flight_request is None and is_flight_request(prompt):
+
+                # Extract cities and find airports
+                flight_result = prepare_flight_request(prompt)
+
+                # Check if the user must select an airport
+                if flight_result["status"] == "airport_choice_required":
+
+                    # Save the flight request
+                    self.pending_flight_request = flight_result
+
+                    # Ask for departure airport first
+                    if flight_result["departure"]["status"] == "airport_choice_required":
+                        side = "departure"
+                        city = flight_result["flight_request"].departure_city
+                    else:
+                        side = "arrival"
+                        city = flight_result["flight_request"].arrival_city
+
+                    # Get available airports
+                    airports = flight_result[side]["airports"]
+
+                    # Build airport options
+                    options = ", ".join(
+                        airport["iata_code"]
+                        for airport in airports
+                    )
+
+                    # Complete the current task
+                    self.task_runtime.complete_task(task.task_id)
+
+                    # Ask the user to select an airport
+                    return (
+                        f"{city} için hangi havalimanını "
+                        f"tercih edersiniz? {options}. "
+                        "'Fark etmez' de diyebilirsiniz."
+                    )
+
+            
+            # Handle a pending airport selection
+            if self.pending_flight_request is not None:
+                flight_result = self.pending_flight_request
+
+                # Find the city waiting for airport selection
+                side = None
+
+                if flight_result["departure"]["status"] == "airport_choice_required":
+                    side = "departure"
+
+                elif flight_result["arrival"]["status"] == "airport_choice_required":
+                    side = "arrival"
+
+                if side is not None:
+                    # Apply the user's airport choice
+                    selected = apply_airport_choice(
+                        flight_result[side],
+                        prompt
+                    )
+
+                    # Handle an invalid airport choice
+                    if selected.get("error"):
+                        airports = flight_result[side]["airports"]
+
+                        options = ", ".join(
+                            airport["iata_code"]
+                            for airport in airports
+                        )
+
+                        self.task_runtime.complete_task(task.task_id)
+
+                        return (
+                            f"Geçerli bir havalimanı seçiniz: {options}. "
+                            "'Fark etmez' de diyebilirsiniz."
+                        )
+
+                    # Save the selected airports
+                    flight_result[side] = selected
+
+                    
+                    # Find the next city that needs airport selection
+                    next_side = None
+
+                    if flight_result["departure"]["status"] == "airport_choice_required":
+                        next_side = "departure"
+
+                    elif flight_result["arrival"]["status"] == "airport_choice_required":
+                        next_side = "arrival"
+
+                    # Ask for the next airport choice
+                    if next_side is not None:
+
+                        # Get the flight information
+                        flight = flight_result["flight_request"]
+
+                        # Get the city name
+                        if next_side == "departure":
+                            city = flight.departure_city
+                        else:
+                            city = flight.arrival_city
+
+                        # Get available airport codes
+                        options = ", ".join(
+                            airport["iata_code"]
+                            for airport in flight_result[next_side]["airports"]
+                        )
+
+                        # Complete the current task
+                        self.task_runtime.complete_task(task.task_id)
+
+                        # Ask the next question
+                        return (
+                            f"{city} için hangi havalimanını "
+                            f"tercih edersiniz? {options}. "
+                            "'Fark etmez' de diyebilirsiniz."
+                        )
+
+                    
+                    # Get the original flight request
+                    flight = flight_result["flight_request"]
+
+                    # Save departure airport codes
+                    flight.departure_airports = [
+                        airport["iata_code"]
+                        for airport in flight_result["departure"]["airports"]
+                    ]
+
+                    # Save arrival airport codes
+                    flight.arrival_airports = [
+                        airport["iata_code"]
+                        for airport in flight_result["arrival"]["airports"]
+                    ]
+
+                    # Mark airport selection as completed
+                    flight_result["status"] = "ready"
+
+                    # Restore the original request with airport choices
+                    prompt = (
+                        f"{flight.original_prompt}\n\n"
+                        "Confirmed airport choices:\n"
+                        f"Departure: {', '.join(flight.departure_airports)}\n"
+                        f"Arrival: {', '.join(flight.arrival_airports)}\n"
+                        "Use these airport codes for the flight search."
+                    )
+
+                    # Clear the pending flight request
+                    self.pending_flight_request = None
+
+
+
+
             # Keep the original research request separate
             # from a possible source-clarification answer
             research_prompt = prompt
