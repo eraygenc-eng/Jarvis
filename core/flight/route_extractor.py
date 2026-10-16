@@ -13,6 +13,14 @@ TURKISH_ROUTE_PATTERN = re.compile(
 )
 
 
+# Match routes separated by a hyphen
+HYPHEN_ROUTE_PATTERN = re.compile(
+    r"(?P<departure>[^\W\d_]+)\s*[-–—]\s*"
+    r"(?P<arrival>[^\W\d_]+)\s+arası\b",
+    re.IGNORECASE,
+)
+
+
 def extract_flight_request(prompt: str) -> FlightRequest:
     """
     Extract flight route information from a user request.
@@ -21,14 +29,19 @@ def extract_flight_request(prompt: str) -> FlightRequest:
     # Create a new flight request
     request = FlightRequest(original_prompt=prompt)
 
-    # Find the departure and arrival cities
+    # Try the Turkish apostrophe format
     match = TURKISH_ROUTE_PATTERN.search(prompt)
 
+    # Try the hyphen format if no match was found
+    if match is None:
+        match = HYPHEN_ROUTE_PATTERN.search(prompt)
+
+    # Return if no route was found
     if match is None:
         return request
 
-    # Storing
+    # Store departure and arrival cities
     request.departure_city = match.group("departure")
-    request.arrival_city =  match.group("arrival")
+    request.arrival_city = match.group("arrival")
 
     return request

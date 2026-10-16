@@ -1,6 +1,8 @@
 import unicodedata
+import re
 
 from psycopg.rows import dict_row
+from collections import Counter
 
 
 def normalize_city(city: str) -> str:
@@ -104,6 +106,7 @@ def resolve_airports(conn, city: str, country_code: str = None):
                 a.iata_code,
                 a.icao_code,
                 a.name,
+                a.keywords,
                 a.municipality,
                 a.iso_country,
                 a.type,
@@ -219,6 +222,142 @@ def resolve_airport_selection(conn, city, country_code=None):
     }
 
 
+def find_mentioned_iata_codes(choice, airports):
+    # Store matching airport codes
+    matches = []
+
+    for airport in airports:
+        code = airport.get("iata_code")
+
+        if not code:
+            continue
+
+        # Match only complete IATA codes
+        pattern = rf"(?<!\w){re.escape(code)}(?!\w)"
+
+        if re.search(pattern, choice, re.IGNORECASE):
+            matches.append(code.upper())
+
+    return list(dict.fromkeys(matches))
+
+
+def get_airport_words(text):
+    text = text.casefold().replace("ı","i")
+
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(
+        char for char in text
+        if not unicodedata.combining(char)
+    )
+
+    return re.findall(r"[a-z0-9]+", text)
+
+
+def get_airport_name_tokens(text):
+    # Get normalized words
+    words = get_airport_words(text)
+
+    # Map airport terms from different languages
+    airport_terms = {
+        "havalimani": "airport",
+        "aeroport": "airport",
+        "aeropuerto": "airport",
+        "aeroporto": "airport",
+        "flughafen": "airport",
+    }
+
+    # Convert airport terms to a common form
+    return [
+        airport_terms.get(word, word)
+        for word in words
+    ]
+
+
+def find_mentioned_airport_names(choice, airports):
+    # Words that do not identify a specific airport
+    ignored_words = {
+        "airport",
+        "international",
+        "havalimani",
+        "aeroport",
+        "airfield",
+        "flughafen"
+    }
+
+    # Keep both ordered and unique words
+    choice_tokens = get_airport_name_tokens(choice)
+    choice_words = set(choice_tokens)
+
+    # Extract words from airport names
+    airport_words = [
+        set(get_airport_words(airport.get("name") or ""))
+        for airport in airports
+    ]
+
+    # Count how many airports contain each word
+    word_counts = Counter(
+        word
+        for words in airport_words
+        for word in words
+    )
+
+    # Extract municipality words
+    municipality_words = [
+        set(get_airport_words(airport.get("municipality") or ""))
+        for airport in airports
+    ]
+
+    # Find words shared by multiple municipalities
+    common_city_words = set()
+
+    valid_municipalities = [
+        words for words in municipality_words if words
+    ]
+
+    if len(valid_municipalities) >= 2:
+        common_city_words = set.intersection(
+            *valid_municipalities
+        )
+
+    matches = []
+
+    for airport, words in zip(airports, airport_words):
+
+        # Get the official airport name
+        name_tokens = get_airport_words(
+            airport.get("name") or ""
+        )
+
+        # Match the complete official name
+        full_name_match = (
+            len(name_tokens) >= 2
+            and any(
+                choice_tokens[i:i + len(name_tokens)] == name_tokens
+                for i in range(
+                    len(choice_tokens) - len(name_tokens) + 1
+                )
+            )
+        )
+
+        # Keep only distinctive airport words
+        distinctive_words = {
+            word for word in words
+            if len(word) >= 4
+            and word not in ignored_words
+            and word not in common_city_words
+            and word_counts[word] == 1
+        }
+
+        # Check if the user mentioned a distinctive word
+        if full_name_match or distinctive_words.intersection(choice_words):
+            code = airport.get("iata_code")
+
+            if code:
+                matches.append(code.upper())
+
+    return list(dict.fromkeys(matches))
+
+
 
 def apply_airport_choice(result, choice):
     if result["status"] != "airport_choice_required":
@@ -267,9 +406,41 @@ def apply_airport_choice(result, choice):
             "selection_mode": "all"
         }
 
-    # Find the airport by IATA code
+    # Find IATA codes in the message
+    mentioned_codes = find_mentioned_iata_codes(
+        choice,
+        result["airports"]
+    )
+
+    # Find airport names in the message
+    mentioned_names = find_mentioned_airport_names(
+        choice,
+        result["airports"]
+    )
+
+    # Combine matches without duplicates
+    matched_codes = set(mentioned_codes) | set(mentioned_names)
+
+    # Reject missing or ambiguous selections
+    if len(matched_codes) != 1:
+        return {**result, "error": "invalid_choice"}
+
+    # Check common negative expressions
+    negative_pattern = (
+        r"\b(?:degil|değil|istem\w*|olmas\w*|"
+        r"secme\w*|seçme\w*|not|no|never|"
+        r"don't|dont|doesn't|doesnt)\b"
+    )
+
+    if re.search(negative_pattern, choice, re.IGNORECASE):
+        return {**result, "error": "invalid_choice"}
+
+    # Get the selected airport code
+    selected_code = next(iter(matched_codes))
+
+    # Find the matching airport
     for airport in result["airports"]:
-        if airport["iata_code"].lower() == choice:
+        if airport["iata_code"].upper() == selected_code:
             return {
                 "status": "resolved",
                 "airport": airport,
@@ -278,7 +449,7 @@ def apply_airport_choice(result, choice):
                 "selection_mode": "single"
             }
 
-    # Ask again if the choice is not recognized
+    # Ask again if no airport was selected
     return {**result, "error": "invalid_choice"}
 
 

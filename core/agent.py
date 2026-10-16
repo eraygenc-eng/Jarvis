@@ -1020,11 +1020,43 @@ No transaction action or approval request is part of this report.
 
         try:
 
-            # Check for a new flight request
-            if self.pending_flight_request is None and is_flight_request(prompt):
+            # Check safely for a pending flight request
+            if getattr(self, "pending_flight_request", None) is None and is_flight_request(prompt):
 
                 # Extract cities and find airports
                 flight_result = prepare_flight_request(prompt)
+
+                
+                # Check if flight cities are missing
+                if flight_result["status"] == "route_incomplete":
+                    self.task_runtime.complete_task(task.task_id)
+
+                    return (
+                        "Kalkış ve varış şehirlerini anlayamadım. "
+                        "Lütfen rotayı 'İstanbul-Frankfurt arası' "
+                        "şeklinde belirtin."
+                    )
+
+                # Check if airports were not found
+                if flight_result["status"] == "not_found":
+                    self.task_runtime.complete_task(task.task_id)
+
+                    return (
+                        "Belirttiğiniz şehirlerden en az biri için "
+                        "havalimanı bulamadım. "
+                        "Lütfen şehir isimlerini kontrol edin."
+                    )
+
+                # Check if the country is required
+                if flight_result["status"] == "country_required":
+                    self.task_runtime.complete_task(task.task_id)
+
+                    return (
+                        "Şehir adı birden fazla ülkede bulunuyor. "
+                        "Devam etmek için ülke bilgisini "
+                        "netleştirmemiz gerekiyor."
+                    )
+
 
                 # Check if the user must select an airport
                 if flight_result["status"] == "airport_choice_required":
@@ -1060,8 +1092,8 @@ No transaction action or approval request is part of this report.
                     )
 
             
-            # Handle a pending airport selection
-            if self.pending_flight_request is not None:
+            # Handle a pending flight selection safely
+            if getattr(self, "pending_flight_request", None) is not None:
                 flight_result = self.pending_flight_request
 
                 # Find the city waiting for airport selection

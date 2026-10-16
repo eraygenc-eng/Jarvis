@@ -1,29 +1,20 @@
 
-import getpass
-import psycopg
 import pytest
+
+from core.database import get_db_connection
 
 from core.airport_resolver import (
     resolve_airports,
     resolve_airports_with_country_check,
     resolve_airport_selection,
-    apply_airport_choice
+    apply_airport_choice,
 )
 
 
 @pytest.fixture(scope="module")
 def db_connection():
-    # Ask for the database password
-    password = getpass.getpass("PostgreSQL password: ")
-
-    # Connect to PostgreSQL
-    with psycopg.connect(
-        host="localhost",
-        port=5432,
-        dbname="jarvis_db",
-        user="jarvis_app",
-        password=password
-    ) as conn:
+    # Connect using the existing database configuration
+    with get_db_connection() as conn:
         yield conn
 
 
@@ -58,7 +49,6 @@ def test_resolve_airports(db_connection, city, country, expected):
 
     # Check for duplicate airports
     assert len(codes) == len(airports)
-
 
 
 def test_country_required(db_connection):
@@ -102,7 +92,6 @@ def test_city_not_found(db_connection):
     assert result["airports"] == []
 
 
-
 def test_single_airport_selection(db_connection):
     # Search for airports in Izmir
     result = resolve_airport_selection(
@@ -144,8 +133,6 @@ def test_country_check_before_selection(db_connection):
     assert result["status"] == "country_required"
     assert "GB" in result["country_codes"]
     assert "CA" in result["country_codes"]
-
-
 
 
 def test_full_flow_all_airports(db_connection):

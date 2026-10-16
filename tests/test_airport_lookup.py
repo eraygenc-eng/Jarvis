@@ -1,6 +1,7 @@
 
 from core.database import get_db_connection
 from core.tools.airport_tools import create_airport_tools
+from core.airport_resolver import apply_airport_choice
 
 
 def test_london_airport_lookup():
@@ -69,3 +70,38 @@ def test_turkish_city_name_londra():
     }
 
     assert "LHR" in airport_codes
+
+
+
+def test_natural_airport_selection():
+    # Create sample airport options
+    result = {
+        "status": "airport_choice_required",
+        "airports": [
+            {
+                "iata_code": "IST",
+                "name": "Istanbul Airport",
+            },
+            {
+                "iata_code": "SAW",
+                "name": "Istanbul Sabiha Gokcen International Airport",
+            },
+        ],
+        "country_codes": ["TR"],
+    }
+
+    # Test different answers for the same airport
+    answers = [
+        "SAW",
+        "SAW.",
+        "SAW olsun",
+        "sabiha gökçen olsun",
+    ]
+
+    for answer in answers:
+        # Apply the user's answer
+        selected = apply_airport_choice(result, answer)
+
+        # Check if the airport was selected
+        assert selected["status"] == "resolved", answer
+        assert selected["airport"]["iata_code"] == "SAW"

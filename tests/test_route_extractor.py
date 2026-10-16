@@ -39,3 +39,22 @@ def test_airport_lists_start_empty():
     # Airport resolution has not started yet
     assert result.departure_airports == []
     assert result.arrival_airports == []
+
+
+
+def test_hyphen_route_with_arasi():
+    # Test a flight request using a hyphen
+    prompt = (
+        "Jarvis bana istanbul-Frankfurt arası "
+        "uçak bileti bak pegasustan."
+    )
+
+    # Extract the flight cities
+    result = extract_flight_request(prompt)
+
+    # Check both city names
+    assert result.departure_city is not None
+    assert result.arrival_city is not None
+
+    assert result.departure_city.casefold() == "istanbul"
+    assert result.arrival_city.casefold() == "frankfurt"
