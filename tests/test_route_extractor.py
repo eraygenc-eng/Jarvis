@@ -2,6 +2,7 @@
 import pytest
 
 from core.flight.route_extractor import extract_flight_request
+from core.flight.route_extractor import detect_city_role, determine_route, extract_verified_route
 
 
 @pytest.mark.parametrize(
@@ -58,3 +59,55 @@ def test_hyphen_route_with_arasi():
 
     assert result.departure_city.casefold() == "istanbul"
     assert result.arrival_city.casefold() == "frankfurt"
+
+
+def test_space_separated_route():
+    # Check a route without a separator
+    result = extract_flight_request("İstanbul Frankfurt uçak bileti bak")
+
+    assert result.departure_city == "İstanbul"
+    assert result.arrival_city == "Frankfurt"
+
+
+def test_turkish_city_roles():
+    # Check direction independently of city order
+    prompt = "Frankfurt'a İstanbul'dan uçak bileti bak"
+
+    assert detect_city_role(prompt, "Frankfurt") == "arrival"
+    assert detect_city_role(prompt, "İstanbul") == "departure"
+
+
+def test_determine_route():
+    # Check a route without direction suffixes
+    result = determine_route(
+        "İstanbul Frankfurt uçak bileti bak",
+        [(0, "istanbul"), (1, "frankfurt")]
+    )
+
+    assert result == ("istanbul", "frankfurt")
+
+    # Check a route with reversed city order
+    result = determine_route(
+        "Frankfurt'a İstanbul'dan uçak bileti bak",
+        [(0, "frankfurt"), (1, "istanbul")]
+    )
+
+    assert result == ("istanbul", "frankfurt")
+
+
+def test_extract_verified_route():
+    # Check a route without direction suffixes
+    result = extract_verified_route(
+        "İstanbul Frankfurt uçak bileti bak",
+        ["frankfurt", "istanbul"]
+    )
+
+    assert result == ("istanbul", "frankfurt")
+
+    # Check reverse word order with direction suffixes
+    result = extract_verified_route(
+        "Frankfurt'a İstanbul'dan uçak bileti bak",
+        ["frankfurt", "istanbul"]
+    )
+
+    assert result == ("istanbul", "frankfurt")

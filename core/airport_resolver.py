@@ -31,6 +31,61 @@ def normalize_city(city: str) -> str:
     return city
 
 
+def normalize_city_candidates(candidates: list[str]) -> list[str]:
+    # Store normalized city candidates
+    normalized = []
+
+    for candidate in candidates:
+        name = normalize_city(candidate)
+
+        # Avoid duplicate candidates
+        if name not in normalized:
+            normalized.append(name)
+
+    return normalized
+
+
+def find_city_matches(conn, candidates: list[str]) -> list[str]:
+    # Normalize all city candidates
+    names = normalize_city_candidates(candidates)
+
+    # Stop if there are no candidates
+    if not names:
+        return []
+
+        # Find verified city aliases
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT alias
+            FROM public.airport_city_aliases
+            WHERE status = 'verified'
+              AND alias = ANY(%s::text[])
+            UNION
+
+            SELECT LOWER(municipality) AS alias
+            FROM public.airports
+            WHERE scheduled_service = TRUE
+              AND iata_code IS NOT NULL
+              AND LOWER(municipality) = ANY(%s::text[])
+
+            UNION
+
+            SELECT c.city_name AS alias
+            FROM unnest(%s::text[]) AS c(city_name)
+            JOIN public.airports AS a
+            ON LOWER(a.municipality) LIKE '%%, ' || c.city_name
+            WHERE a.scheduled_service = TRUE
+            AND a.iata_code IS NOT NULL
+            """,
+            (names, names, names)
+        )
+
+        # Return matched city names
+        return [row["alias"] for row in cur.fetchall()]
+
+
+
 # municipality -> yerleşim yeri
 # Alias -> Takma ad
 def extract_city_aliases(municipality, keywords):

@@ -1,6 +1,16 @@
-from core.flight.route_extractor import extract_flight_request
-from core.airport_resolver import resolve_airport_selection
 from core.database import get_db_connection
+
+from core.flight.route_extractor import (
+    extract_flight_request,
+    split_route_words,
+    build_city_candidates,
+    extract_verified_route,
+)
+
+from core.airport_resolver import (
+    resolve_airport_selection,
+    find_city_matches,
+)
 
 
 def prepare_flight_request(prompt: str) -> dict:
@@ -11,16 +21,27 @@ def prepare_flight_request(prompt: str) -> dict:
     # Extract cities from the user request
     flight = extract_flight_request(prompt)
 
-    # Check missing ones
-    if not flight.departure_city or not flight.arrival_city:
-        return {
-            "status": "route_incomplete",
-            "flight_request": flight,
-        }
-
     conn = get_db_connection()
 
     try:
+
+        # Use database matching if regex fails
+        if not flight.departure_city or not flight.arrival_city:
+            words = split_route_words(prompt)
+            candidates = build_city_candidates(words)
+            matches = find_city_matches(conn, candidates)
+
+            flight.departure_city, flight.arrival_city = (
+                extract_verified_route(prompt, matches)
+            )
+
+        # Stop if the route is still incomplete
+        if not flight.departure_city or not flight.arrival_city:
+            return {
+                "status": "route_incomplete",
+                "flight_request": flight,
+            }
+
         departure = resolve_airport_selection(
             conn, 
             flight.departure_city
