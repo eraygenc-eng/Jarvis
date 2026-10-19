@@ -111,3 +111,19 @@ def test_extract_verified_route():
     )
 
     assert result == ("istanbul", "frankfurt")
+
+
+def test_hyphen_route_without_arasi():
+    prompt = "istanbul-viyana"
+
+    request = extract_flight_request(prompt)
+
+    assert request.departure_city == "istanbul"
+    assert request.arrival_city == "viyana"
+
+    verified = extract_verified_route(
+        prompt,
+        ["istanbul", "viyana"]
+    )
+
+    assert verified == ("istanbul", "viyana")

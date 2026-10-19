@@ -63,18 +63,18 @@ def find_city_matches(conn, candidates: list[str]) -> list[str]:
               AND alias = ANY(%s::text[])
             UNION
 
-            SELECT LOWER(municipality) AS alias
+            SELECT LOWER(unaccent(municipality)) AS alias
             FROM public.airports
             WHERE scheduled_service = TRUE
               AND iata_code IS NOT NULL
-              AND LOWER(municipality) = ANY(%s::text[])
+              AND LOWER(unaccent(municipality)) = ANY(%s::text[])
 
             UNION
 
             SELECT c.city_name AS alias
             FROM unnest(%s::text[]) AS c(city_name)
             JOIN public.airports AS a
-            ON LOWER(a.municipality) LIKE '%%, ' || c.city_name
+            ON LOWER(unaccent(a.municipality)) LIKE '%%, ' || c.city_name
             WHERE a.scheduled_service = TRUE
             AND a.iata_code IS NOT NULL
             """,
@@ -177,9 +177,9 @@ def resolve_airports(conn, city: str, country_code: str = None):
                   (
                       a.municipality IS NOT NULL
                       AND (
-                          LOWER(a.municipality) = %s
-                          OR LOWER(a.municipality) LIKE %s
-                          OR LOWER(a.municipality) LIKE %s
+                          LOWER(unaccent(a.municipality)) = %s
+                          OR LOWER(unaccent(a.municipality)) LIKE %s
+                          OR LOWER(unaccent(a.municipality)) LIKE %s
                       )
                   )
 
