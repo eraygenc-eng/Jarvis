@@ -8,3 +8,5 @@ performance*.log
 *.png
 data/airports.csv
 data/*.db
+data/geonames/*.zip
+data/geonames/*.csv

@@ -12,6 +12,8 @@ from core.airport_resolver import (
     find_city_matches,
 )
 
+from core.global_city_resolver import resolve_city
+
 
 def prepare_flight_request(prompt: str) -> dict:
     """
@@ -42,14 +44,39 @@ def prepare_flight_request(prompt: str) -> dict:
                 "flight_request": flight,
             }
 
+        departure_city = resolve_city(flight.departure_city)
+        arrival_city = resolve_city(flight.arrival_city)
+
+        city_statuses = {
+            departure_city["status"],
+            arrival_city["status"]
+        }
+
+        if "not_found" in city_statuses:
+            return {
+                "status": "not_found",
+                "flight_request": flight
+            }
+
+        # Stop if a city is ambiguous
+        if "ambiguous" in city_statuses:
+            return {
+                "status": "city_choice_required",
+                "flight_request": flight,
+                "departure_city": departure_city,
+                "arrival_city": arrival_city
+            }
+
         departure = resolve_airport_selection(
             conn, 
-            flight.departure_city
+            departure_city["city"][1],
+            country_code=departure_city["city"][2]
         )
 
         arrival = resolve_airport_selection(
             conn,
-            flight.arrival_city
+            arrival_city["city"][1],
+            country_code=arrival_city["city"][2]
         )
 
     finally:

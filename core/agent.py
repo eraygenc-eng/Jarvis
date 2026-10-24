@@ -990,6 +990,37 @@ No transaction action or approval request is part of this report.
 
         return self.research_controller
 
+
+    async def _flight_feedback(self, original_prompt: str, issue: str) -> str:
+        messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Jarvis. "
+                "Reply in the same language as the user's original request. "
+                "Write one short and clear message. "
+                "Explain the given issue and ask for missing information. "
+                "Do not invent facts or start a flight search. "
+                "Keep the user's original city names."
+            )
+        },
+        {
+            "role": "user",
+            "content": json.dumps({
+                "original_request": original_prompt,
+                "issue": issue
+            }, ensure_ascii=False)
+        }
+    ]
+
+        # Generate feedback in the user's language
+        try:
+            response = await self.llm.get_model().ainvoke(messages)
+        except Exception:
+            response = await self.llm.get_fallback_model().ainvoke(messages)
+
+        # Return the generated text
+        return extract_response_text(response.content)
     
 
     def _get_config(self) -> dict:
@@ -1037,6 +1068,50 @@ No transaction action or approval request is part of this report.
                         "şeklinde belirtin."
                     )
 
+                # Check if a city needs clarification
+                if flight_result["status"] == "city_choice_required":
+
+                    # Complete the current task
+                    self.task_runtime.complete_task(task.task_id)
+
+                    # Ask the user to clarify the location
+                    return (
+                        "Şehir adını kesin olarak belirleyemedim. "
+                        "Lütfen uçuş isteğini şehir ve ülke bilgileriyle "
+                        "gerekirse bölgeyi de belirterek tekrar yazın."
+                    )
+
+                # Check if a city needs clarification
+                if flight_result["status"] == "city_choice_required":
+
+                    # Get the original flight request
+                    flight = flight_result["flight_request"]
+
+                    # Find ambiguous cities
+                    ambiguous_cities = []
+
+                    for side in ("departure", "arrival"):
+                        city_result = flight_result[f"{side}_city"]
+
+                        if city_result["status"] == "ambiguous":
+                            city_name = getattr(flight, f"{side}_city")
+                            ambiguous_cities.append(city_name)
+
+                    # Generate feedback in the user's language
+                    message = await self._flight_feedback(
+                        original_prompt=flight.original_prompt,
+                        issue=(
+                            f"Ambiguous cities: {', '.join(ambiguous_cities)}. "
+                            "Ask the user to clarify the country or region "
+                            "and repeat the full flight request."
+                        )
+                    )
+
+                    # Complete the current task
+                    self.task_runtime.complete_task(task.task_id)
+
+                    return message
+
                 # Check if airports were not found
                 if flight_result["status"] == "not_found":
                     self.task_runtime.complete_task(task.task_id)
@@ -1081,15 +1156,22 @@ No transaction action or approval request is part of this report.
                         for airport in airports
                     )
 
+                    # Ask for an airport in the user's language
+                    message = await self._flight_feedback(
+                        original_prompt=flight_result["flight_request"].original_prompt,
+                        issue=(
+                            f"The user must choose an airport for {city}. "
+                            f"Available airport codes: {options}. "
+                            "Ask the user to select an airport. "
+                            "Also explain that any airport is acceptable. "
+                            "Keep all airport codes unchanged."
+                        )
+                    )
+
                     # Complete the current task
                     self.task_runtime.complete_task(task.task_id)
 
-                    # Ask the user to select an airport
-                    return (
-                        f"{city} için hangi havalimanını "
-                        f"tercih edersiniz? {options}. "
-                        "'Fark etmez' de diyebilirsiniz."
-                    )
+                    return message
 
             
             # Handle a pending flight selection safely
