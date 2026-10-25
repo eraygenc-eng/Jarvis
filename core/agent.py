@@ -116,7 +116,7 @@ from core.research.task_classifier import is_flight_request
 class JarvisAgent:
 
     # Default per-source model cycle budget
-    max_source_model_cycles = 20
+    max_source_model_cycles = 25
 
     
     def __init__(
@@ -156,7 +156,7 @@ class JarvisAgent:
         self.max_stalled_research_continuations = 2
 
         # Maximum model cycles allowed for one research source
-        self.max_source_model_cycles = 20
+        self.max_source_model_cycles = 25
 
         # Research tools use the active comparison state
         research_tools = create_research_tools(

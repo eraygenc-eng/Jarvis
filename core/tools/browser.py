@@ -589,6 +589,19 @@ class BrowserManager:
             arguments = getattr(request, "args", {})
             url = arguments.get("url", "")
 
+            # Redirect the Pegasus homepage to the booking page.
+            if (
+                tool_name == "browser_navigate"
+                and url.rstrip("/") in {
+                    "https://www.flypgs.com",
+                    "https://flypgs.com",
+                    "https://www.flypgs.com/en",
+                    "https://www.flypgs.com/tr",
+                }
+            ):
+                url = "https://web.flypgs.com/booking?language=tr"
+                arguments["url"] = url
+
             # Pause page-changing actions during human verification.
             # Read-only browser tools are still allowed
             if(
