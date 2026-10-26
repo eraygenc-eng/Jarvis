@@ -1,3 +1,5 @@
+import re
+
 from core.database import get_db_connection
 
 from core.flight.route_extractor import (
@@ -10,6 +12,8 @@ from core.flight.route_extractor import (
 from core.airport_resolver import (
     resolve_airport_selection,
     find_city_matches,
+    apply_airport_choice,
+    resolve_airport_by_iata
 )
 
 from core.global_city_resolver import resolve_city
@@ -26,6 +30,40 @@ def prepare_flight_request(prompt: str) -> dict:
     conn = get_db_connection()
 
     try:
+
+        # Resolve explicit airport codes before city matching
+        if (
+            len(flight.departure_airports) == 1
+            and len(flight.arrival_airports) == 1
+        ):
+            departure_airport = resolve_airport_by_iata(
+                conn, flight.departure_airports[0]
+            )
+
+            arrival_airport = resolve_airport_by_iata(
+                conn, flight.arrival_airports[0]
+            )
+
+            # Continue only when both airport codes are valid
+            if departure_airport and arrival_airport:
+                return {
+                    "status": "ready",
+                    "flight_request": flight,
+                    "departure": {
+                        "status": "resolved",
+                        "airport": departure_airport,
+                        "airports": [departure_airport],
+                        "country_codes": [departure_airport["iso_country"]],
+                        "selection_mode": "single",
+                    },
+                    "arrival": {
+                        "status": "resolved",
+                        "airport": arrival_airport,
+                        "airports": [arrival_airport],
+                        "country_codes": [arrival_airport["iso_country"]],
+                        "selection_mode": "single",
+                    },
+                }
 
         # Use database matching if regex fails
         if not flight.departure_city or not flight.arrival_city:
@@ -78,6 +116,27 @@ def prepare_flight_request(prompt: str) -> dict:
             arrival_city["city"][1],
             country_code=arrival_city["city"][2]
         )
+
+        # Read explicit airport codes from the user request
+        iata_codes = re.findall(r"\(([A-Z]{3})\)", prompt.upper())
+
+        # Apply codes when departure and arrival are both specified
+        if len(iata_codes) == 2:
+            departure_code, arrival_code = iata_codes
+
+            # Select the departure airport if a choice is required
+            if departure["status"] == "airport_choice_required":
+                selected = apply_airport_choice(departure, departure_code)
+
+                if not selected.get("error"):
+                    departure = selected
+
+            # Select the arrival airport if a choice is required
+            if arrival["status"] == "airport_choice_required":
+                selected = apply_airport_choice(arrival, arrival_code)
+
+                if not selected.get("error"):
+                    arrival = selected
 
     finally:
         conn.close()

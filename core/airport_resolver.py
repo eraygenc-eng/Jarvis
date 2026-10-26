@@ -250,6 +250,43 @@ def resolve_airports_with_country_check(conn, city, country_code=None):
 
 
 
+def resolve_airport_by_iata(conn, iata_code: str):
+    # Normalize the airport code
+    code = iata_code.strip().upper()
+
+    # Reject invalid IATA code formats
+    if len(code) != 3 or not code.isascii() or not code.isalpha():
+        return None
+
+    # Find the airport in the database
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT
+                iata_code,
+                icao_code,
+                name,
+                municipality,
+                iso_country,
+                type,
+                scheduled_service
+            FROM public.airports
+            WHERE UPPER(TRIM(iata_code)) = %s
+              AND scheduled_service = TRUE
+            LIMIT 2
+            """,
+            (code,)
+        )
+
+        airports = cur.fetchall()
+
+    # Accept only one unambiguous airport
+    if len(airports) != 1:
+        return None
+
+    return airports[0]
+
+
 def resolve_airport_selection(conn, city, country_code=None):
     result = resolve_airports_with_country_check(conn, city, country_code)
 

@@ -135,6 +135,14 @@ def extract_flight_request(prompt: str) -> FlightRequest:
     # Create a new flight request
     request = FlightRequest(original_prompt=prompt)
 
+    # Extract airport codes explicitly provided in parentheses
+    iata_codes = re.findall(r"\(([A-Za-z]{3})\)", prompt)
+
+    # Store departure and arrival airport codes in route order
+    if len(iata_codes) == 2:
+        request.departure_airports = [iata_codes[0].upper()]
+        request.arrival_airports = [iata_codes[1].upper()]
+
     # Try the Turkish apostrophe format
     match = TURKISH_ROUTE_PATTERN.search(prompt)
 

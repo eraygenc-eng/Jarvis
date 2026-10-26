@@ -189,6 +189,7 @@ class BrowserManager:
             r"\brecaptcha\b",
             r"\bhcaptcha\b",
             r"\bturnstile\b",
+            r"yoksa robot mu",
         ]
 
         # Check all CAPTCHA patterns first.
@@ -870,8 +871,12 @@ class BrowserManager:
         page_text = observation.page_text
 
 
-        # Detect anything that may interrupt normal browsing
-        interruption_kind, interruption_message = (self._detect_page_interruption(page_text))
+        # Check the page URL and content for human verification
+        interruption_kind, interruption_message = (
+            self._detect_page_interruption(
+                f"{page_url}\n{page_text}"
+            )
+        )
 
         # This text will be added to the model-facing observation
         interruption_notice = ""

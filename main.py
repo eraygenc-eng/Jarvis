@@ -29,6 +29,7 @@ async def main():
         llm,
         browser_tools,
         observation_store=browser.observations,
+        browser_manager=browser
     )
 
     # Let the browser access the active research controller

@@ -119,15 +119,18 @@ class JarvisAgent:
     max_source_model_cycles = 25
 
     
-    def __init__(
-        self,
-        llm: BaseLLM,
-        browser_tools=None,
-        *,
-        observation_store: ObservationStore
-    ):
+    def __init__(self, llm: BaseLLM, browser_tools=None, *, observation_store: ObservationStore, browser_manager=None):
         self.llm = llm
         self.observation_store = observation_store
+
+        # Keep access to the browser manager
+        self.browser_manager = browser_manager
+
+        # Track whether research is paused for human verification
+        self._research_paused_for_human = False
+
+        # Store the research request during human verification
+        self._paused_research_prompt: str | None = None
 
         # Keeps conversation history in memory
         self.memory = InMemorySaver()
@@ -265,6 +268,17 @@ class JarvisAgent:
             if context is None or not context.research_active:
                 return None
 
+            # Pause research when human verification is required
+            if self._human_verification_pending():
+                self._research_paused_for_human = True
+
+                print(
+                    "[ResearchPause] "
+                    "reason=human_verification"
+                )
+
+                return {"jump_to": "end"}
+
             # Re-check whether the final page observation is still valid.
             self._refresh_final_page_status()
 
@@ -382,6 +396,21 @@ class JarvisAgent:
             agent=self.agent,
             task_runtime=self.task_runtime,
         )
+
+
+
+    def _human_verification_pending(self) -> bool:
+        if self.browser_manager is None:
+            return False
+
+        # Read the current CAPTCHA waiting state
+        return bool(
+        getattr(
+            self.browser_manager,
+            "_waiting_for_human_verification",
+            False
+        )
+    )
 
 
     def _build_source_clarification_message(
@@ -1051,8 +1080,48 @@ No transaction action or approval request is part of this report.
 
         try:
 
-            # Check safely for a pending flight request
-            if getattr(self, "pending_flight_request", None) is None and is_flight_request(prompt):
+            # Track whether we are resuming a paused research
+            resuming_research = False
+
+            # Handle human verification before a new request
+            if self._research_paused_for_human:
+
+                # Only accept a resume command while paused
+                if prompt.strip().casefold() not in {"devam", "devam et", "continue"}:
+                    self.task_runtime.complete_task(task.task_id)
+                    return "Araştırma duraklatıldı. CAPTCHA'yı tamamlayıp 'devam' yazın."
+
+                # Read the current browser page
+                snapshot = await self.browser_manager.capture_snapshot(
+                    mode="full"
+                )
+
+                # Do not resume if the page could not be checked
+                if snapshot.startswith(("OBSERVATION FAILED", "OBSERVATION NOT STORED")):
+                    self.task_runtime.complete_task(task.task_id)
+                    return "Tarayıcı sayfasını doğrulayamadım. Lütfen tekrar deneyin."
+
+                # Keep waiting if CAPTCHA is still present
+                if self._human_verification_pending():
+                    self.task_runtime.complete_task(task.task_id)
+                    return "CAPTCHA hâlâ aktif. Lütfen doğrulamayı tamamlayın."
+
+                # Restore the original research request
+                prompt = self._paused_research_prompt
+                resuming_research = True
+
+                # Clear the paused state
+                self._research_paused_for_human = False
+                self._paused_research_prompt = None
+
+                print("[ResearchResume] Human verification completed")
+
+            # Do not preprocess a resumed flight request again
+            if (
+                not resuming_research
+                and getattr(self, "pending_flight_request", None) is None
+                and is_flight_request(prompt)
+            ):
 
                 # Extract cities and find airports
                 flight_result = prepare_flight_request(prompt)
@@ -1130,6 +1199,38 @@ No transaction action or approval request is part of this report.
                         "Şehir adı birden fazla ülkede bulunuyor. "
                         "Devam etmek için ülke bilgisini "
                         "netleştirmemiz gerekiyor."
+                    )
+
+
+                # Use confirmed airports without asking again
+                if flight_result["status"] == "ready":
+                    flight = flight_result["flight_request"]
+
+                    # Get the resolved departure airport codes
+                    flight.departure_airports = [
+                        airport["iata_code"]
+                        for airport in flight_result["departure"]["airports"]
+                    ]
+
+                    # Get the resolved arrival airport codes
+                    flight.arrival_airports = [
+                        airport["iata_code"]
+                        for airport in flight_result["arrival"]["airports"]
+                    ]
+
+                    # Pass confirmed airports to the research agent
+                    prompt = (
+                        f"{flight.original_prompt}\n\n"
+                        "Confirmed airport choices:\n"
+                        f"Departure: {', '.join(flight.departure_airports)}\n"
+                        f"Arrival: {', '.join(flight.arrival_airports)}\n"
+                        "Use these airport codes for the flight search."
+                    )
+
+                    print(
+                        "[FlightPreprocessor] "
+                        f"departure={flight.departure_airports} | "
+                        f"arrival={flight.arrival_airports}"
                     )
 
 
@@ -1456,13 +1557,19 @@ No transaction action or approval request is part of this report.
             if self.research_controller is not None:
                 self.research_controller.reset_navigation_attempts()
 
+            # Continue the existing research after human verification
+            if resuming_research:
+                executor_prompt = self._build_research_continuation_prompt()
+            else:
+                executor_prompt = research_prompt
+
             # Run the request through the action executor
             result = await self.action_executor.execute_agent_turn(
                 task=task,
                 messages=[
                     {
                         "role": "user",
-                        "content": research_prompt,
+                        "content": executor_prompt,
                     }
                 ],
                 config=config,
@@ -1480,6 +1587,7 @@ No transaction action or approval request is part of this report.
                 while (
                     self.current_comparison_state is not None
                     and not self.current_comparison_state.is_ready_to_return()
+                    and not self._research_paused_for_human
                 ):
                     # Stop if the deterministic controller rejects a new step
                     if self.research_controller.should_stop():
@@ -1512,6 +1620,10 @@ No transaction action or approval request is part of this report.
 
                     self._refresh_final_page_status()
 
+                    # Stop research when human verification is required
+                    if self._research_paused_for_human:
+                        break
+
                     progress_after = self._research_progress_signature()
 
                     # Track whether this step made useful research progress
@@ -1519,6 +1631,20 @@ No transaction action or approval request is part of this report.
                         self.research_controller.record_no_progress()
                     else:
                         self.research_controller.record_progress()
+
+                # Return control to the user during human verification
+                if self._research_paused_for_human:
+
+                    # Preserve the original research request
+                    self._paused_research_prompt = research_prompt
+
+                    self.task_runtime.complete_task(task.task_id)
+
+                    return (
+                        "Araştırmayı insan doğrulaması için duraklattım. "
+                        "Lütfen tarayıcıdaki CAPTCHA'yı manuel tamamlayın. "
+                        "Tamamladıktan sonra 'devam' yazın."
+                    )
 
             if (
                 task_type == TaskType.COMPARISON
