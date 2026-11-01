@@ -133,20 +133,40 @@ def compact_auto_observation_message(
 ) -> ToolMessage:
     """Compact only the embedded automatic observation."""
 
-    if not isinstance(message.content, str):
+    
+    # Support plain text and lists containing only text blocks.
+    if isinstance(message.content, str):
+        content = message.content
+
+    elif isinstance(message.content, list):
+        # Do not discard non-text browser results.
+        text_only = all(
+            isinstance(item, str)
+            or (
+                isinstance(item, dict)
+                and item.get("type", "text") == "text"
+                and isinstance(item.get("text"), str)
+            )
+            for item in message.content
+        )
+
+        if not text_only:
+            return message
+
+        content = get_tool_message_text(message)
+
+    else:
         return message
 
-    marker_index = message.content.find(
+
+    marker_index = content.find(
         AUTO_OBSERVATION_MARKER
     )
 
     if marker_index == -1:
         return message
 
-    # Preserve the actual browser action result.
-    action_content = message.content[
-        :marker_index
-    ].rstrip()
+    action_content = content[:marker_index].rstrip()
 
     compact_observation = (
         "ARCHIVED AUTO BROWSER OBSERVATION\n"
@@ -442,9 +462,14 @@ def compact_old_browser_snapshots(
         if metadata is None:
             continue
 
-        # Keep short snapshots unchanged.
-        if len(message.content) <= SNAPSHOT_TRIM_THRESHOLD:
+        
+        # Measure actual text length, not the number of content blocks.
+        message_text = get_tool_message_text(message)
+
+        # Keep genuinely short snapshots unchanged.
+        if len(message_text) <= SNAPSHOT_TRIM_THRESHOLD:
             continue
+
 
         # Keep the current observation unchanged.
         if (

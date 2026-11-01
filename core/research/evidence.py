@@ -348,9 +348,17 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
         if(total_chars and total_chars + len(block) > max_chars):
             break
 
+        
         blocks.append(block)
-        used_refs.add(ref)
+
+        # Remember all references already visible in this block.
+        # Avoid adding nested controls again as separate blocks.
+        used_refs.update(
+            re.findall(r"\[ref=([^\]]+)\]", block)
+        )
+
         total_chars += len(block)
+
 
         # Stop if no blocks could be created
     if not blocks:

@@ -590,6 +590,26 @@ class BrowserManager:
             arguments = getattr(request, "args", {})
             url = arguments.get("url", "")
 
+            
+            # Normalize incorrectly formatted Playwright snapshot references.
+            if tool_name == "browser_click":
+                target = arguments.get("target")
+
+                if isinstance(target, str):
+                    match = re.fullmatch(
+                        r"ref=([A-Za-z0-9_-]+)",
+                        target.strip()
+                    )
+
+                    if match:
+                        arguments["target"] = match.group(1)
+
+                        print(
+                            f"[BrowserTarget] normalized: "
+                            f"{target} -> {arguments['target']}"
+                        )
+
+
             # Redirect the Pegasus homepage to the booking page.
             if (
                 tool_name == "browser_navigate"
@@ -684,6 +704,39 @@ class BrowserManager:
 
             # Run the real Playwright action
             response = await handler(request)
+
+            # Pause after opening Skyscanner for manual testing
+            if (
+                tool_name == "browser_navigate"
+                and self._get_source_from_url(url) in {
+                    "skyscanner.com",
+                    "skyscanner.com.tr"
+                }
+            ):
+                await asyncio.to_thread(
+                    input,
+                    "[BrowserDebug] Test Skyscanner manually, then press Enter..."
+                )
+
+            # Check network requests after typing and waiting
+            if tool_name in {"browser_type", "browser_wait_for"}:
+                network_result = await self.session.call_tool(
+                    "browser_network_requests",
+                    arguments={"static": False}
+                )
+
+                network_text = "\n".join(
+                    block.text
+                    for block in network_result.content
+                    if block.type == "text"
+                )
+
+                print("[BrowserNetworkDebug] Network requests:")
+
+                for line in network_text.splitlines()[-20:]:
+                    # Hide URL query parameters in debug logs
+                    safe_line = re.sub(r"\?[^\s]*", "?[hidden]", line)
+                    print("[BrowserNetworkDebug]", safe_line[:250])
 
             # Debug
             if tool_name == "browser_find":
@@ -1060,13 +1113,25 @@ class BrowserManager:
         if auto_interruption_depth < 3:
             interruption_handled = await self._handle_safe_interruption(page_text)  
 
+            
             if interruption_handled:
-                # Read the page again after closing the interruption
-                return await self._capture_snapshot(
+                # Get a fresh snapshot after handling the interruption.
+                refreshed_snapshot = await self._capture_snapshot(
                     focus=focus,
                     mode=mode,
                     auto_interruption_depth=auto_interruption_depth + 1
                 )
+
+                # Tell the agent that the interruption was already handled.
+                # Avoid repeating consent actions without new evidence.
+                return (
+                    "BROWSER NOTICE: A cookie or popup control was clicked "
+                    "automatically. Continue with the main task. "
+                    "Do not retry consent unless a new blocking dialog "
+                    "is visible in the current snapshot.\n\n"
+                    + refreshed_snapshot
+                )
+
 
         
         # Store the new browser observation.

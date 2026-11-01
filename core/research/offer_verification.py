@@ -30,12 +30,26 @@ class OfferQuote(BaseModel):
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    offer_ref: str
-    identity_evidence: str
+    offer_ref: str = Field(
+        description="Select the smallest single-offer container containing identity, seller and price. Do not select only the booking button."
+    )
+
+    identity_evidence: str = Field(
+        description="Copy exact identity text from the selected offer subtree. Do not paraphrase."
+    )
+
     seller: str
-    seller_evidence: str
+
+    seller_evidence: str = Field(
+        description="Copy exact seller/provider text from the same subtree. Do not explain or summarize."
+    )
+
     currency: str
-    price_evidence: str
+
+    price_evidence: str = Field(
+        description="Copy the exact price line including its [ref=...] and amount from the same subtree."
+    )
+
     price_amount_texts: dict[str, str]
     price_decimal_separator: Literal[".", ","]
     price: float | None = Field(default=None, ge=0)

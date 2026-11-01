@@ -27,6 +27,9 @@ def prepare_flight_request(prompt: str) -> dict:
     # Extract cities from the user request
     flight = extract_flight_request(prompt)
 
+    # Show cities extracted from the user request
+    print("[FlightDebug] Initial route:", flight.departure_city, flight.arrival_city)
+
     conn = get_db_connection()
 
     try:
@@ -75,6 +78,9 @@ def prepare_flight_request(prompt: str) -> dict:
                 extract_verified_route(prompt, matches)
             )
 
+        # Show the route after database fallback
+        print("[FlightDebug] Final route:", flight.departure_city, flight.arrival_city)
+    
         # Stop if the route is still incomplete
         if not flight.departure_city or not flight.arrival_city:
             return {
@@ -84,6 +90,10 @@ def prepare_flight_request(prompt: str) -> dict:
 
         departure_city = resolve_city(flight.departure_city)
         arrival_city = resolve_city(flight.arrival_city)
+
+        # Show the city resolution results
+        print("[FlightDebug] Departure:", departure_city)
+        print("[FlightDebug] Arrival:", arrival_city)
 
         city_statuses = {
             departure_city["status"],

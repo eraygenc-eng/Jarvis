@@ -115,11 +115,11 @@ def resolve_city(city_name, country_code=None, admin1_code=None):
     first_population = first_city[4] or 0
     second_population = second_city[4] or 0
 
-    # Check if the city is a major administrative center
+    # Check if the city is an administrative center
     is_major_city = (
-        first_feature in ("PPLC", "PPLA") # !!
-        and first_population >= 100_000
-    )
+        first_feature == "PPLC"
+        or first_feature.startswith("PPLA")
+    ) and first_population >= 100_000
 
     # Compare populations when both values are known
     population_is_decisive = (
