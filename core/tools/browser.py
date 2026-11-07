@@ -954,6 +954,28 @@ class BrowserManager:
             # Keep only controls and nearby context needed for browser actions
             interactive_snapshot = get_interactive_snapshot(page_text)
 
+            # Debug airport suggestions on Ucuzabilet.
+            if "ucuzabilet.com" in page_url:
+                pattern = re.compile(
+                    r"\b(?:SAW|STN|option|listbox)\b|sabiha|stansted",
+                    re.IGNORECASE,
+                )
+
+                for label, content in (
+                    ("raw", page_text),
+                    ("filtered", interactive_snapshot),
+                ):
+                    matches = [
+                        line.strip()
+                        for line in content.splitlines()
+                        if pattern.search(line)
+                    ]
+
+                    print(f"[AirportDebug] {label}: {len(matches)} matches")
+
+                    for line in matches[-12:]:
+                        print(f"[AirportDebug] {label}: {line[:200]}")
+
             print(
                 "[BrowserSnapshot] interactive_result="
                 f"{len(interactive_snapshot):,} chars"

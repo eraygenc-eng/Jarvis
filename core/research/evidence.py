@@ -209,8 +209,14 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
 
         role = role_match.group(1).casefold()
 
-        # Skip non-interactive roles
-        if role not in interactive_roles:
+        # Some clickable elements have non-interactive roles.
+        is_clickable_extra = (
+            role in {"listitem", "generic", "cell"}
+            and "[cursor=pointer]" in line
+        )
+
+        # Keep standard controls and clickable extra elements.
+        if role not in interactive_roles and not is_clickable_extra:
             continue
 
         ref = _extract_ref_from_line(line)
@@ -284,6 +290,65 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
             )
 
     for index, ref in ordered_controls:
+
+        # Find values in active input fields.
+        active_values = []
+
+        for line in lines:
+            is_active_input = (
+                re.match(
+                    r"^\s*-\s*(?:textbox|searchbox|combobox)\b",
+                    line,
+                    re.IGNORECASE,
+                )
+                and "[active]" in line
+                and "]:" in line
+            )
+
+            if is_active_input:
+                value = line.rsplit("]:", 1)[-1].strip()
+                value_key = re.sub(r"[^\w]+", "", value.casefold())
+
+                if len(value_key) >= 3:
+                    active_values.append(value_key)
+
+        # Find clickable suggestions matching the active input.
+        priority_controls = []
+
+        for index, ref in controls:
+            line = lines[index]
+
+            is_suggestion = re.match(
+                r"^\s*-\s*(?:listitem|option|generic)\b",
+                line,
+                re.IGNORECASE,
+            )
+
+            is_clickable = (
+                "[cursor=pointer]" in line
+                or re.match(r"^\s*-\s*option\b", line, re.IGNORECASE)
+            )
+
+            line_key = re.sub(r"[^\w]+", "", line.casefold())
+
+            if (
+                is_suggestion
+                and is_clickable
+                and any(value in line_key for value in active_values)
+            ):
+                priority_controls.append((index, ref))
+
+        # Put matching suggestions before ordinary controls.
+        priority_controls = priority_controls[-6:]
+        priority_refs = {ref for _, ref in priority_controls}
+
+        ordered_controls = (
+            priority_controls
+            + [
+                item for item in ordered_controls
+                if item[1] not in priority_refs
+            ]
+        )[:max_controls]
 
         # Do not add the same ref twice
         if ref in used_refs:
