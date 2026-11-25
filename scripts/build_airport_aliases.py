@@ -35,7 +35,7 @@ def save_airport_aliases(conn, airport_id, municipality, keywords):
 
 def import_all_airport_aliases(conn, batch_size=500, limit=None):
     # Validate input values
-    if batch_size <= 0:
+    if batch_size <= 0: 
         raise ValueError("batch_size must be positive")
 
     if limit is not None and limit < 0:
@@ -85,7 +85,7 @@ def import_all_airport_aliases(conn, batch_size=500, limit=None):
                 candidates = build_airport_alias_candidates(
                     airport_id,
                     municipality,
-                    None
+                    keywords
                 )
 
                 # Collect generated aliases

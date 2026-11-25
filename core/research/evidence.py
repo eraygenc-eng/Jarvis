@@ -289,66 +289,139 @@ def get_interactive_snapshot(page_text: str, *, max_chars: int = 24000, max_cont
                 + remaining_controls[:remaining_slots]
             )
 
-    for index, ref in ordered_controls:
+    # Find values in active input fields.
+    active_values = []
 
-        # Find values in active input fields.
-        active_values = []
-
-        for line in lines:
-            is_active_input = (
-                re.match(
-                    r"^\s*-\s*(?:textbox|searchbox|combobox)\b",
-                    line,
-                    re.IGNORECASE,
-                )
-                and "[active]" in line
-                and "]:" in line
-            )
-
-            if is_active_input:
-                value = line.rsplit("]:", 1)[-1].strip()
-                value_key = re.sub(r"[^\w]+", "", value.casefold())
-
-                if len(value_key) >= 3:
-                    active_values.append(value_key)
-
-        # Find clickable suggestions matching the active input.
-        priority_controls = []
-
-        for index, ref in controls:
-            line = lines[index]
-
-            is_suggestion = re.match(
-                r"^\s*-\s*(?:listitem|option|generic)\b",
+    for line in lines:
+        is_active_input = (
+            re.match(
+                r"^\s*-\s*(?:textbox|searchbox|combobox)\b",
                 line,
                 re.IGNORECASE,
             )
+            and "[active]" in line
+            and "]:" in line
+        )
 
-            is_clickable = (
-                "[cursor=pointer]" in line
-                or re.match(r"^\s*-\s*option\b", line, re.IGNORECASE)
+        if is_active_input:
+            value = line.rsplit("]:", 1)[-1].strip()
+            value_key = re.sub(r"[^\w]+", "", value.casefold())
+
+            if len(value_key) >= 3:
+                active_values.append(value_key)
+
+    # Find clickable suggestions matching the active input.
+    priority_controls = []
+
+    for index, ref in controls:
+        line = lines[index]
+
+        is_suggestion = re.match(
+            r"^\s*-\s*(?:listitem|option|generic)\b",
+            line,
+            re.IGNORECASE,
+        )
+
+        is_clickable = (
+            "[cursor=pointer]" in line
+            or re.match(r"^\s*-\s*option\b", line, re.IGNORECASE)
+        )
+
+        line_key = re.sub(r"[^\w]+", "", line.casefold())
+
+        if (
+            is_suggestion
+            and is_clickable
+            and any(value in line_key for value in active_values)
+        ):
+            priority_controls.append((index, ref))
+
+    # Put matching suggestions before ordinary controls.
+    priority_controls = priority_controls[-6:]
+    priority_refs = {ref for _, ref in priority_controls}
+
+    ordered_controls = (
+        priority_controls
+        + [
+            item for item in ordered_controls
+            if item[1] not in priority_refs
+        ]
+    )[:max_controls]
+
+
+    # Keep calendar months and dates together.
+    month_pattern = re.compile(
+        r"^\s*-\s*generic \[ref=[^\]]+\]:\s*"
+        r"((?:Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|"
+        r"Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)"
+        r"\s+20\d{2})\s*$",
+        re.IGNORECASE,
+    )
+
+    calendar_slots = 0
+    months_added = 0
+
+    for i, line in enumerate(lines[:-1]):
+        month = month_pattern.match(line)
+        if not month:
+            continue
+
+        table = re.match(
+            r"^\s*-\s*table \[ref=([^\]]+)\]",
+            lines[i + 1],
+        )
+        if not table:
+            continue
+
+        try:
+            subtree = get_snapshot_subtree(
+                page_text, table.group(1)
             )
+        except ValueError:
+            continue
 
-            line_key = re.sub(r"[^\w]+", "", line.casefold())
+        date_lines = [
+            day.strip()
+            for day in subtree.splitlines()
+            if re.match(
+                r'^\s*-\s*link "\d{1,2}" \[ref=[^\]]+\]',
+                day,
+            )
+        ]
 
-            if (
-                is_suggestion
-                and is_clickable
-                and any(value in line_key for value in active_values)
-            ):
-                priority_controls.append((index, ref))
+        if not date_lines:
+            continue
 
-        # Put matching suggestions before ordinary controls.
-        priority_controls = priority_controls[-6:]
-        priority_refs = {ref for _, ref in priority_controls}
+        calendar_block = (
+            f"CALENDAR {month.group(1)}\n"
+            + "\n".join(date_lines)
+        )
 
-        ordered_controls = (
-            priority_controls
-            + [
-                item for item in ordered_controls
-                if item[1] not in priority_refs
-            ]
-        )[:max_controls]
+        if (
+            calendar_slots + len(date_lines) > max_controls
+            or total_chars + len(calendar_block) > max_chars
+        ):
+            continue
+
+        blocks.append(calendar_block)
+        total_chars += len(calendar_block)
+        calendar_slots += len(date_lines)
+
+        used_refs.update(
+            re.findall(r"\[ref=([^\]]+)\]", calendar_block)
+        )
+
+        months_added += 1
+        if months_added >= 2:
+            break
+
+    ordered_controls = ordered_controls[
+        :max_controls - calendar_slots
+    ]
+
+
+    # Build snapshot blocks.
+    for index, ref in ordered_controls:
 
         # Do not add the same ref twice
         if ref in used_refs:

@@ -20,6 +20,27 @@ from core.research.evidence import (
 from urllib.parse import urlparse
 
 
+def read_ucuzabilet_calendar(page_text: str) -> tuple[list[str], str | None]:
+    month_names = (
+        "Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|"
+        "Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık"
+    )
+
+    months = re.findall(
+        rf"(?m)^\s*- generic \[ref=[\w-]+\]: ((?:{month_names}) \d{{4}})\s*$",
+        page_text,
+    )
+
+    next_refs = re.findall(
+        r'(?m)^\s*- generic "ileri(?:&#x3e;?|>)" \[ref=([\w-]+)\]',
+        page_text,
+    )
+
+    next_ref = next_refs[0] if len(next_refs) == 1 else None
+    return months, next_ref
+
+
+
 class BrowserManager:
     def __init__(self, *, headless: bool = False):
         self.client = MultiServerMCPClient(
@@ -697,6 +718,31 @@ class BrowserManager:
                 # Remember this attempt before Playwright runs
                 controller.register_navigation_attempt(url)
 
+            log_ucuzabilet_type = False
+
+            if tool_name == "browser_type":
+                observation_id = self.observations.current_observation_id
+                observation = self.observations.get(observation_id) if observation_id else None
+
+                if observation is not None:
+                    hostname = self._get_source_from_url(observation.page_url)
+                    log_ucuzabilet_type = hostname == "ucuzabilet.com"
+
+                    if log_ucuzabilet_type:
+                        target = arguments.get("target", "")
+                        for label in (
+                            "Havalimanı Adı/Kodu, Şehir",
+                            "Havalimanı adı/kodu, Şehir",
+                        ):
+                            pattern = (
+                                rf'(?m)^\s*-\s+textbox "{re.escape(label)}"'
+                                rf'[^\n]*\[ref={re.escape(target)}\](?=\s|:|$)'
+                            )
+                            if target and re.search(pattern, observation.page_text):
+                                arguments["target"] = f'input[placeholder="{label}"]:visible'
+                                print(f"[UcuzabiletInput] {target} -> {arguments['target']}")
+                                break
+
             # Invalidate the snapshot only when the action may change the page
             if self._browser_action_may_change_page(tool_name):
                 self._page_changed = True
@@ -704,6 +750,20 @@ class BrowserManager:
 
             # Run the real Playwright action
             response = await handler(request)
+
+            if log_ucuzabilet_type:
+                response_text = "\n".join(
+                    block.text
+                    for block in response.content
+                    if block.type == "text"
+                )
+
+                print(
+                    f"[UcuzabiletType] target={arguments.get('target')!r} "
+                    f"text={arguments.get('text')!r} "
+                    f"is_error={response.isError}"
+                )
+                print(f"[UcuzabiletType] response={response_text[:800]}")
 
             # Pause after opening Skyscanner for manual testing
             if (
@@ -953,6 +1013,58 @@ class BrowserManager:
         if mode == "interactive":
             # Keep only controls and nearby context needed for browser actions
             interactive_snapshot = get_interactive_snapshot(page_text)
+
+            if self._get_source_from_url(page_url) == "ucuzabilet.com":
+                field_lines = [
+                    line.strip()
+                    for line in page_text.splitlines()
+                    if re.match(r"^\s*-\s+(textbox|combobox)\b", line)
+                    and "[ref=" in line
+                ]
+
+                print(f"[UcuzabiletFields] count={len(field_lines)}")
+                for line in field_lines:
+                    print(f"[UcuzabiletFields] {line}")
+
+                if field_lines:
+                    interactive_snapshot = (
+                        "Current input fields on Ucuzabilet. "
+                        "Use the exact ref shown for the intended field. "
+                        "If the field is unclear, inspect it before typing.\n"
+                        + "\n".join(field_lines)
+                        + "\n\n"
+                        + interactive_snapshot
+                    )
+
+            # Debug calendar controls on Ucuzabilet.
+            if "ucuzabilet.com" in page_url:
+                for label, content in (
+                    ("raw", page_text),
+                    ("filtered", interactive_snapshot),
+                ):
+                    lines = content.splitlines()
+
+                    calendar_indices = [
+                        i
+                        for i, line in enumerate(lines)
+                        if "kasım 2026" in line.casefold()
+                        and "uçak bileti" not in line.casefold()
+                        and not re.match(r"^\s*-\s*link\b", line)
+                        and len(line.strip()) < 100
+                    ]
+
+                    if not calendar_indices:
+                        print(f"[CalendarDebug] {label}: header NOT FOUND")
+                        continue
+
+                    calendar_index = calendar_indices[-1]
+
+                    print(f"[CalendarDebug] {label}: calendar found")
+
+                    for line in lines[
+                        max(0, calendar_index - 3):calendar_index + 85
+                    ]:
+                        print(f"[CalendarDebug] {label}: {line.strip()[:180]}")
 
             # Debug airport suggestions on Ucuzabilet.
             if "ucuzabilet.com" in page_url:
@@ -1249,6 +1361,179 @@ class BrowserManager:
                 mode=mode
             )
 
+
+        @tool
+        async def ucuzabilet_go_to_month(year: int, month: int) -> str:
+            """On Ucuzabilet, advance the open flight calendar to a target year
+            and month in one call. Use this instead of clicking next month
+            repeatedly. After it returns, select the requested day using the
+            returned snapshot. This tool moves forward only.
+            """
+            month_names = (
+                "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+                "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+            )
+
+            if not 1 <= month <= 12 or not 1 <= year <= 9999:
+                return "Geçersiz yıl veya ay."
+
+            target = (year, month)
+            target_label = f"{month_names[month - 1]} {year}"
+
+            async with self._action_lock:
+                if self._waiting_for_human_verification:
+                    return "Tarayıcı kullanıcı doğrulaması bekliyor."
+
+                previous_months = []
+                clicks = 0
+
+                while True:
+                    snapshot = await self._capture_snapshot(
+                        focus=f"Ucuzabilet takvimi: {target_label}",
+                        mode="interactive",
+                    )
+
+                    observation_id = self.observations.current_observation_id
+                    observation = self.observations.get(observation_id)
+                    if self._waiting_for_human_verification or observation is None:
+                        return "Güncel takvim görüntüsü alınamadı."
+
+                    if self._get_source_from_url(observation.page_url) != "ucuzabilet.com":
+                        return "Bu araç yalnızca Ucuzabilet takviminde kullanılabilir."
+
+                    months, next_ref = read_ucuzabilet_calendar(observation.page_text)
+                    print(f"[UcuzabiletCalendar] target={target_label} "
+                          f"visible={months} clicks={clicks}")
+
+                    if target_label in months:
+                        return f"{target_label} görünür. İstenen günü seç.\n\n{snapshot}"
+
+                    if not months or next_ref is None:
+                        return "Açık takvim veya tek bir ileri oku bulunamadı."
+
+                    if months == previous_months:
+                        return f"Tıklama sonrası takvim ilerlemedi. Görünen aylar: {months}"
+
+                    first_month, first_year = months[0].split()
+                    first_visible = (int(first_year), month_names.index(first_month) + 1)
+                    if target < first_visible:
+                        return f"Hedef ay görünen takvimden önce. Görünen aylar: {months}"
+
+                    if clicks >= 24:
+                        return f"24 ay geçişinden sonra hedefe ulaşılamadı: {months}"
+
+                    previous_months = months
+                    self._page_changed = True
+                    self.observations.invalidate_current()
+
+                    result = await self.session.call_tool(
+                        "browser_click",
+                        arguments={"element": "Takvimde sonraki ay", "target": next_ref},
+                    )
+                    if result.isError:
+                        detail = "\n".join(
+                            block.text for block in result.content if block.type == "text"
+                        )
+                        return f"Takvim oku tıklanamadı: {detail[:400]}"
+
+                    clicks += 1
+
+
+        @tool
+        async def ucuzabilet_set_adults(count: int) -> str:
+            """Set the adult count in the OPEN Ucuzabilet passenger panel.
+            Open Yolcular once, then call this tool with the requested adult
+            count. On success click Uygula and check the passenger summary.
+            """
+
+            def report(message: str) -> str:
+                print(f"[UcuzabiletAdults] {message}")
+                return message
+
+            print(f"[UcuzabiletAdults] started target={count}")
+
+            if count < 1:
+                return "Yetişkin sayısı en az 1 olmalı."
+
+            async with self._action_lock:
+                if self._waiting_for_human_verification:
+                    return "Tarayıcı kullanıcı doğrulaması bekliyor."
+
+                # Read the live value only from the visible adult counter.
+                read_count_js = """() => {
+                    const host = location.hostname.toLowerCase();
+                    if (host !== 'ucuzabilet.com' &&
+                        host !== 'www.ucuzabilet.com') return -1;
+
+                    const inputs = [...document.querySelectorAll(
+                        '.passenger-count-buttons input[name="ADULT"]'
+                    )].filter(input => input.getClientRects().length > 0);
+
+                    if (inputs.length !== 1) return -1;
+                    const value = inputs[0].value.trim();
+                    return /^\\d+$/.test(value) ? Number(value) : -1;
+                }"""
+
+                previous_count = None
+                while True:
+                    result = await self.session.call_tool(
+                        "browser_evaluate",
+                        arguments={"function": read_count_js},
+                    )
+                    text = "\n".join(
+                        block.text for block in result.content if block.type == "text"
+                    )
+                    match = re.search(r"(?m)^### Result\s*\n(-?\d+)\s*$", text)
+                    if result.isError or match is None:
+                        return report(
+                            f"Sayaç yanıtı okunamadı. is_error={result.isError}, "
+                            f"response={text[:500]!r}"
+                        )
+
+                    current = int(match.group(1))
+                    if current < 0:
+                        return report("Açık ve görünür tek bir ADULT sayacı bulunamadı.")
+
+                    print(f"[UcuzabiletAdults] current={current} target={count}")
+
+                    if current == count:
+                        return (
+                            f"Yetişkin sayısı {current} olarak doğrulandı. "
+                            "Uygula düğmesine tıkla ve formdaki yolcu özetini kontrol et."
+                        )
+
+                    if previous_count is not None:
+                        expected = previous_count + (1 if count > previous_count else -1)
+                        if current != expected:
+                            return (
+                                f"Sayaç beklenen şekilde değişmedi: "
+                                f"önce={previous_count}, şimdi={current}, hedef={count}."
+                            )
+
+                    button_class = (
+                        ".input-group-append" if current < count
+                        else ".input-group-prepend"
+                    )
+                    target = (
+                        '.passenger-count-buttons:has(input[name="ADULT"])'
+                        f':visible > {button_class}:visible'
+                    )
+
+                    previous_count = current
+                    self._page_changed = True
+                    self.observations.invalidate_current()
+
+                    click = await self.session.call_tool(
+                        "browser_click",
+                        arguments={"element": "Yetişkin sayacı", "target": target},
+                    )
+                    if click.isError:
+                        detail = "\n".join(
+                            block.text for block in click.content if block.type == "text"
+                        )
+                        return f"Yetişkin sayacı tıklanamadı: {detail[:350]}"
+        
+
         # Replace only the agent-facing snapshot tool.
         self.tools = [
             existing_tool
@@ -1257,6 +1542,8 @@ class BrowserManager:
         ]
 
         self.tools.append(browser_snapshot)
+        self.tools.append(ucuzabilet_go_to_month)
+        self.tools.append(ucuzabilet_set_adults)
 
     async def stop(self):
         self.observations.invalidate_current()

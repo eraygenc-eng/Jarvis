@@ -127,6 +127,9 @@ def prepare_flight_request(prompt: str) -> dict:
             country_code=arrival_city["city"][2]
         )
 
+        print("[AirportDebug] Departure:", departure_city["city"][1], departure)
+        print("[AirportDebug] Arrival:", arrival_city["city"][1], arrival)
+
         # Read explicit airport codes from the user request
         iata_codes = re.findall(r"\(([A-Z]{3})\)", prompt.upper())
 

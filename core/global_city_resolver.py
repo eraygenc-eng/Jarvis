@@ -144,6 +144,38 @@ def resolve_city(city_name, country_code=None, admin1_code=None):
             "candidates": candidates
         }
 
+    # Try one more rule when the existing checks could not select a city.
+    requested_name = city_name.strip().casefold()
+    first_name_matches = first_city[1].casefold() == requested_name
+
+    if is_major_city and first_name_matches:
+        # The initial query returns at most five candidates.
+        # Check the rest before treating the first city as unique.
+        all_candidates = candidates
+        if len(candidates) == 5:
+            all_candidates = search_city(
+                city_name,
+                limit=None,
+                country_code=country_code,
+                admin1_code=admin1_code,
+            )
+
+        def is_plausible_alternative(city):
+            feature = city[3] or ""
+            population = city[4] or 0
+            return (
+                feature == "PPLC"
+                or feature.startswith("PPLA")
+                or population > 0
+            )
+
+        if not any(is_plausible_alternative(city) for city in all_candidates[1:]):
+            return {
+                "status": "resolved",
+                "city": first_city,
+                "candidates": candidates,
+            }
+
     return {
         "status": "ambiguous",
         "city": None,

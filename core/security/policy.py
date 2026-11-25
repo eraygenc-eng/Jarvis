@@ -80,6 +80,10 @@ TOOL_PERMISSIONS = {
     "desktop_scroll": ToolPermission.ALLOW,
 
 
+    "ucuzabilet_go_to_month": ToolPermission.ALLOW,
+    "ucuzabilet_set_adults": ToolPermission.ALLOW,
+
+
     # Tools that need extra checks
     "browser_navigate": ToolPermission.CONDITIONAL,
     "browser_click": ToolPermission.CONDITIONAL,
