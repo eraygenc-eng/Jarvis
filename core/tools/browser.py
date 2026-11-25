@@ -551,7 +551,7 @@ class BrowserManager:
         return None
 
 
-    async def _handle_safe_interruption(self, page_text: str) -> bool:
+    async def _handle_safe_interruption(self, page_text: str, page_url: str) -> bool:
         """
         Handle a safe cookie banner or normal popup.
 
@@ -564,6 +564,17 @@ class BrowserManager:
             return False
 
         interruption_kind, label, ref = action
+
+        # Ucuzabilet's passenger selector also has a "Close" button.
+        if (
+            self._get_source_from_url(page_url) == "ucuzabilet.com"
+            and interruption_kind == "popup"
+            and label.strip().casefold() in {"close", "kapat"}
+        ):
+            panel_text = page_text.casefold()
+            if all(word in panel_text for word in ("yetişkin", "çocuk", "bebek", "uygula")):
+                print("[UcuzabiletPassengers] Yolcu paneli açık, seçim bekleniyor.")
+                return False
 
         print(
             "[BrowserInterruption] "
@@ -1245,7 +1256,7 @@ class BrowserManager:
 
         # Handle safe page interruptions before stoping the observ
         if auto_interruption_depth < 3:
-            interruption_handled = await self._handle_safe_interruption(page_text)  
+            interruption_handled = await self._handle_safe_interruption(page_text, page_url)  
 
             
             if interruption_handled:
