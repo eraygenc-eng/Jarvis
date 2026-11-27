@@ -662,6 +662,10 @@ class ComparisonState:
         return terminal
 
     def is_ready_to_return(self) -> bool:
+
+        if self.category == "flight":
+            return self.coverage_complete()
+
         pending_exists = any(
             result.verification_status == VerificationStatus.PENDING
             for result in self.results

@@ -792,9 +792,12 @@ class BrowserManager:
             # Run the real Playwright action
             response = await handler(request)
 
-            if tool_name == "browser_click" and "google flights" in str(
-                arguments.get("element", "")
-            ).casefold():
+            click_label = str(arguments.get("element", "")).casefold()
+            if tool_name == "browser_click" and (
+                "google flights" in click_label
+                or "date" in click_label
+                or "tarih" in click_label
+            ):
                 click_reply = "\n".join(
                     block.text
                     for block in response.content

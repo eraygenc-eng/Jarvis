@@ -986,7 +986,7 @@ def create_research_tools(
                 canonical_source,
             )
 
-            if unverified_winners:
+            if state.category != "flight" and unverified_winners:
                 result_ids = ", ".join(
                     result.result_id
                     for result in unverified_winners
