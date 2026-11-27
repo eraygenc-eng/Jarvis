@@ -132,14 +132,9 @@ CATEGORY_KEYWORDS = {
 CATEGORY_SOURCES = {
     ResearchCategory.FLIGHT: [
         "Google Flights",
-        "Skyscanner",
-        "Kayak",
         "Ucuzabilet",
         "Enuygun",
-        "Turkish Airlines",
-        "AJet",
         "Pegasus",
-        "Airline Official Websites",
     ],
 
     ResearchCategory.HOTEL: [
@@ -199,12 +194,9 @@ SOURCE_DOMAINS = {
     "Itopya": {"itopya.com"},
 
     # Flight and travel sources
-    "Skyscanner": {"skyscanner.com", "skyscanner.com.tr"},
     "Kayak": {"kayak.com", "kayak.com.tr"},
     "Ucuzabilet": {"ucuzabilet.com"},
     "Enuygun": {"enuygun.com"},
-    "Turkish Airlines": {"turkishairlines.com"},
-    "AJet": {"ajet.com"},
     "Pegasus": {"flypgs.com", "pegasusairlines.com"},
     "Booking": {"booking.com"},
     "Agoda": {"agoda.com"},
@@ -500,15 +492,36 @@ def detect_research_category(prompt: str) -> ResearchCategory:
 
 
 
-def plan_source_selection(
-    prompt: str,
-    category: ResearchCategory | None = None,
-    product_type: ProductType | None = None,
-) -> SourceSelection:
+def plan_source_selection(prompt: str, category: ResearchCategory | None = None, product_type: ProductType | None = None) -> SourceSelection:
 
     # Detect the category only when it was not already provided
     if category is None:
         category = detect_research_category(prompt)
+
+    if category == ResearchCategory.FLIGHT:
+        flight_sources = CATEGORY_SOURCES[ResearchCategory.FLIGHT]
+        source_prompt = normalize_text(prompt).replace("’", "'")
+
+        # "En Uygun'dan bak" veya "En Uygun sitesinde ara" marka adıdır.
+        # "En uygun uçak biletini bul" ise genel fiyat aramasıdır.
+        source_prompt = re.sub(
+            r"\ben uygun(?='?(?:dan|da|a)\b|\s+(?:site\w*|uzerinden)\b)",
+            "enuygun",
+            source_prompt,
+        )
+
+        selected = select_sources(source_prompt, flight_sources)
+
+        # Yalnızca desteklenmeyen bir site istendiyse aramayı başlatma.
+        unsupported_sites = (
+            "thy", "turk hava yollari", "turkish airlines",
+            "ajet", "kayak", "skyscanner",
+        )
+        if any(contains_keyword(source_prompt, site) for site in unsupported_sites):
+            if not extract_explicit_sources(source_prompt, flight_sources):
+                return SourceSelection(sources=[], needs_clarification=True)
+
+        return selected
 
     # Use specialized sources for product comparisons
     if category == ResearchCategory.PRODUCT:

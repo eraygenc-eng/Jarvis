@@ -754,6 +754,36 @@ class BrowserManager:
                                 print(f"[UcuzabiletInput] {target} -> {arguments['target']}")
                                 break
 
+
+            if tool_name == "browser_click":
+                element = str(arguments.get("element", "")).casefold()
+                observation_id = self.observations.current_observation_id
+                observation = (
+                    self.observations.get(observation_id)
+                    if observation_id else None
+                )
+
+                if observation is not None:
+                    page = urlparse(observation.page_url)
+                    on_google_flights = (
+                        page.hostname in {
+                            "google.com", "www.google.com",
+                            "google.com.tr", "www.google.com.tr",
+                        }
+                        and page.path.startswith("/travel/flights")
+                    )
+                    search_button = element in {
+                        "google flights search button",
+                        "google flights ara button",
+                    }
+
+                    if on_google_flights and search_button:
+                        arguments["target"] = (
+                            'role=button[name=/^(Ara|Uçuşları ara|Search|Search flights)$/i]'
+                        )
+                        print("[GoogleFlightsSearch] Arama düğmesi adıyla hedeflendi")
+
+
             # Invalidate the snapshot only when the action may change the page
             if self._browser_action_may_change_page(tool_name):
                 self._page_changed = True
@@ -761,6 +791,20 @@ class BrowserManager:
 
             # Run the real Playwright action
             response = await handler(request)
+
+            if tool_name == "browser_click" and "google flights" in str(
+                arguments.get("element", "")
+            ).casefold():
+                click_reply = "\n".join(
+                    block.text
+                    for block in response.content
+                    if block.type == "text"
+                )
+                print(
+                    f"[GoogleFlightsClick] target={arguments.get('target')} "
+                    f"is_error={response.isError}\n"
+                    f"{click_reply[:1200]}"
+                )
 
             if log_ucuzabilet_type:
                 response_text = "\n".join(
@@ -1098,6 +1142,22 @@ class BrowserManager:
 
                     for line in matches[-12:]:
                         print(f"[AirportDebug] {label}: {line[:200]}")
+
+            host = self._get_source_from_url(observation.page_url) or ""
+            if host == "flypgs.com" or host.endswith(".flypgs.com"):
+                for label, content in (
+                    ("raw", page_text),
+                    ("filtered", interactive_snapshot),
+                ):
+                    lines = content.splitlines()
+                    for index, line in enumerate(lines):
+                        if "nereye" in line.casefold():
+                            print(f"[PegasusDebug] {label} | Nereye alanı")
+                            for nearby in lines[max(0, index - 3):index + 6]:
+                                print(f"[PegasusDebug] {nearby}")
+                            break
+                    else:
+                        print(f"[PegasusDebug] {label} | Nereye bulunamadı")
 
             print(
                 "[BrowserSnapshot] interactive_result="

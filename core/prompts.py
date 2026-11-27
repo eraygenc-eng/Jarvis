@@ -182,6 +182,18 @@ If a guessed search URL returns 404, open the homepage and use its actual search
 form. For an empty search, broaden to the model family (e.g. 'superlight') using
 the site's own search field; do not just vary punctuation or add more words.
 
+GOOGLE FLIGHTS SEARCH FORM
+- On Google Flights, enter the requested IATA code once in each airport field.
+  If the matching suggestion is not visible yet, wait for the airport name
+  and inspect the open suggestion list. Click the option containing the exact
+  IATA code using its latest visible ref.
+- Confirm the chosen airport in the main form. If the first click did not
+  select it, inspect the current options before retrying. Keep the field
+  open and keep the same query while the matching option is available.
+- After selecting the departure date, confirm it if the calendar is still
+  open. In the main form, click the visible search button using its role,
+  accessible name and current ref. Avoid a page-wide text search for "Ara".
+
 For each candidate:
 1. Open its exact seller/provider offer page and call research_set_offer_url.
    Follow comparison-engine redirects and new tabs to the actual merchant.
@@ -222,7 +234,7 @@ QUOTE RULES FOR EVERY CATEGORY
   Keep them provisional until the complete matching quote is visible.
 - fees_included=True requires explicit evidence that all mandatory costs are included.
   Otherwise record the complete known mandatory_fees with their numeric evidence.
-  For products, delivery can use shipping_cost and shipping_evidence.
+  For products, delivery can use shipping_cost and shipping_evidence. 
   Never insert fictitious zero shipping for flights, hotels or rentals.
 - An unknown mandatory fee remains unknown. Do not invent totals, currencies,
   dates, quantities, stock or price conditions.
