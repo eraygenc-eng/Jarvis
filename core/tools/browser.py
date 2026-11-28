@@ -89,6 +89,10 @@ class BrowserManager:
         # Get the active research controller when needed
         self._research_controller_getter = None
 
+        # Track the source open in the current research tab.
+        self._tab_research_state = None
+        self._tab_source_key: str | None = None
+
 
     def reset_request_focus(self) -> None:
         # Do not carry a semantic snapshot focus into a new user request.
@@ -724,6 +728,26 @@ class BrowserManager:
                         ],
                         isError=False
                     )
+
+                state = controller.state
+                if self._tab_research_state is not state:
+                    self._tab_research_state = state
+                    self._tab_source_key = None
+
+                host = self._get_source_from_url(url)
+                source_key = state.source_key_for_domain(host)
+
+                if self._tab_source_key is not None and source_key != self._tab_source_key:
+                    tab_result = await self.session.call_tool(
+                        "browser_tabs",
+                        arguments={"action": "new"},
+                    )
+                    if tab_result.isError:
+                        return tab_result
+
+                    print(f"[ResearchTabs] New tab: {self._tab_source_key} -> {source_key}")
+
+                self._tab_source_key = source_key
                 
 
                 # Remember this attempt before Playwright runs

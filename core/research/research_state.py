@@ -199,6 +199,24 @@ class ResearchState:
         return cleaned_source in self.visited_sources
 
 
+    def source_key_for_domain(self, domain: str) -> str:
+        host = domain.strip().lower().rstrip(".")
+
+        def matches(known_domain: str) -> bool:
+            return host == known_domain or host.endswith("." + known_domain)
+
+        # Several domains can belong to one research source.
+        for source, domains in self.dynamic_domains.items():
+            if any(matches(domain) for domain in domains):
+                return source
+
+        # Use the most specific matching domain from the research plan.
+        return max(
+            (domain for domain in self.allowed_domains if matches(domain)),
+            key=len,
+            default=host,
+        )
+
 
     def is_domain_allowed(self, source: str) -> bool:
         cleaned_source = source.strip().lower()

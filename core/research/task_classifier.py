@@ -196,6 +196,7 @@ FLIGHT_REQUEST_KEYWORDS = [
     "karsilastir",
     "rezervasyon",
     "satin al",
+    "listele",
 
     # English request words
     "ticket",
